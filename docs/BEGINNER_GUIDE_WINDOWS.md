@@ -109,6 +109,30 @@ Extra examples:
 .\scripts\test_windows.ps1 -Source multipleTags.mp4 -Mode task1
 ```
 
+Pre-ship Task 1 test flow (Windows):
+```powershell
+.\scripts\setup_windows_deps.ps1
+.\scripts\build_windows.ps1
+.\scripts\test_windows.ps1 -Source Tag0.mp4 -Mode task1
+.\scripts\test_windows.ps1 -Source multipleTags.mp4 -Mode task1
+```
+
+One-command version:
+```powershell
+.\scripts\pre_ship_windows.ps1
+```
+
+If you also want dependency install + debug output generation:
+```powershell
+.\scripts\pre_ship_windows.ps1 -InstallDeps -GenerateDebug
+```
+
+Expected result before shipping:
+- `Tag0.mp4`: one tag is labeled with `ID` + rotation for most frames.
+- `multipleTags.mp4`: all three tags are labeled when all are visible in the same frame.
+- Detected quad lines and corner dots sit on the printed tag boundary.
+- ID/rotation text remains near each tag and does not jump to unrelated regions.
+
 Optional full example (only if you downloaded these files):
 ```powershell
 .\scripts\test_windows.ps1 -Source Tag0.mp4 -Template iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj wolf.obj
@@ -133,11 +157,21 @@ Debugging missing tags:
 .\scripts\test_windows.ps1 -Source Tag0.mp4 -Mode task1 -DebugDir debug_out
 ```
 
+For multi-tag debugging:
+```powershell
+.\scripts\test_windows.ps1 -Source multipleTags.mp4 -Mode task1 -DebugDir debug_out
+```
+
 Look at these files in `debug_out` for each frame:
 - `gray`, `blurred`, `sobel`, `binary` -> preprocessing quality
 - `contours` -> whether tag-like boundaries are detected
 - `warped_tag_*`, `warped_binary_*` -> whether candidate tags are decodable
 - `final` -> what the detector finally shows
+
+Quick triage for `multipleTags.mp4`:
+1. If all three white sheets are visible in `final` but only one/two are labeled, check if all three appear in `warped_tag_*`.
+2. If a missing tag has no `warped_tag_*` candidate, quad filtering is the bottleneck.
+3. If a missing tag has `warped_tag_*` but wrong/no label, decode quality is the bottleneck; inspect `warped_binary_*`.
 
 ## 7) How to Learn from This Code
 - Start by printing one debug message per stage in `main.cpp`.

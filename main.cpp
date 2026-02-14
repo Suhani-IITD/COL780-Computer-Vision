@@ -5,8 +5,10 @@
 #include <fstream>
 #include <sstream>
 #include <set>
+#include <array>
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <unordered_map>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/utils/filesystem.hpp>
@@ -433,6 +435,69 @@ static std::string orientation_label(int clockwise_rotations_to_canonical)
     return "ROT-270";
 }
 
+static bool extract_quad_from_contour_extrema(const std::vector<cv::Point> &contour,
+                                              std::vector<cv::Point> &quad)
+{
+    quad.clear();
+    if (contour.size() < 4)
+    {
+        return false;
+    }
+
+    int idx_tl = 0, idx_tr = 0, idx_br = 0, idx_bl = 0;
+    int min_sum = std::numeric_limits<int>::max();
+    int max_sum = std::numeric_limits<int>::min();
+    int min_diff = std::numeric_limits<int>::max();
+    int max_diff = std::numeric_limits<int>::min();
+
+    for (int i = 0; i < static_cast<int>(contour.size()); ++i)
+    {
+        const int x = contour[i].x;
+        const int y = contour[i].y;
+        const int sum = x + y;
+        const int diff = x - y;
+
+        if (sum < min_sum)
+        {
+            min_sum = sum;
+            idx_tl = i;
+        }
+        if (sum > max_sum)
+        {
+            max_sum = sum;
+            idx_br = i;
+        }
+        if (diff > max_diff)
+        {
+            max_diff = diff;
+            idx_tr = i;
+        }
+        if (diff < min_diff)
+        {
+            min_diff = diff;
+            idx_bl = i;
+        }
+    }
+
+    quad = {contour[idx_tl], contour[idx_tr], contour[idx_br], contour[idx_bl]};
+
+    // Reject degenerate quads with repeated corners.
+    for (size_t i = 0; i < quad.size(); ++i)
+    {
+        for (size_t j = i + 1; j < quad.size(); ++j)
+        {
+            if (cv::norm(quad[i] - quad[j]) < 3.0)
+            {
+                quad.clear();
+                return false;
+            }
+        }
+    }
+
+    custom_sort_corners(quad);
+    return is_convex_polygon(quad);
+}
+
 static void overlay_template_on_frame(const cv::Mat &template_img,
                                       const std::vector<cv::Point> &quad_corners,
                                       cv::Mat &display)
@@ -585,8 +650,10 @@ int main(int argc, char **argv)
 
     const int blur_kernel_size = 5;
     const double blur_sigma = 1.4;
-    const uchar threshold_val = 50;
-    const int min_quad_area = 500;
+    const uchar threshold_val = 45;
+    const int min_quad_area = 220;
+    const int min_contour_points = 20;
+    const double max_quad_edge_ratio = 4.2;
     const cv::Size canonical_tag_size(200, 200);
     std::unordered_map<int, PoseSmoother> pose_smoothers_by_id;
     const bool enable_task2_overlay = (run_mode == RunMode::All || run_mode == RunMode::Task2);
@@ -633,35 +700,81 @@ int main(int argc, char **argv)
         save_debug_image(debug_dir, frame_idx, "contours", contour_debug);
         bool warped_shown = false;
         int quad_counter = 0;
+        std::vector<cv::Point2f> accepted_tag_centers;
+        const std::array<double, 10> epsilon_factors = {0.006, 0.010, 0.014, 0.018, 0.022, 0.028, 0.035, 0.045, 0.055, 0.070};
+
+        std::sort(detected_contours.begin(), detected_contours.end(),
+                  [](const std::vector<cv::Point> &a, const std::vector<cv::Point> &b)
+                  { return a.size() > b.size(); });
 
         for (const auto &raw_contour : detected_contours)
         {
-            if (raw_contour.size() < 40)
+            if (raw_contour.size() < static_cast<size_t>(min_contour_points))
             {
                 continue;
             }
 
             const double perimeter = get_contour_perimeter(raw_contour);
-            double epsilon = 0.02 * perimeter;
+            if (perimeter <= 1.0)
+            {
+                continue;
+            }
 
             std::vector<cv::Point> approx_curve;
-            rdp_simplify(raw_contour, approx_curve, epsilon);
-            if (approx_curve.size() > 4)
+            std::vector<cv::Point> closed_contour = raw_contour;
+            closed_contour.push_back(raw_contour.front());
+
+            bool quad_found = false;
+            for (const double eps_factor : epsilon_factors)
             {
-                rdp_simplify(raw_contour, approx_curve, epsilon * 1.5);
+                std::vector<cv::Point> approx_candidate;
+                rdp_simplify(closed_contour, approx_candidate, eps_factor * perimeter);
+
+                if (!approx_candidate.empty() && approx_candidate.front() == approx_candidate.back())
+                {
+                    approx_candidate.pop_back();
+                }
+
+                std::vector<cv::Point> dedup_points;
+                dedup_points.reserve(approx_candidate.size());
+                for (const auto &p : approx_candidate)
+                {
+                    if (dedup_points.empty() || p != dedup_points.back())
+                    {
+                        dedup_points.push_back(p);
+                    }
+                }
+
+                if (dedup_points.size() != 4)
+                {
+                    continue;
+                }
+                if (!is_convex_polygon(dedup_points))
+                {
+                    continue;
+                }
+                if (std::abs(contour_area(dedup_points)) < min_quad_area)
+                {
+                    continue;
+                }
+
+                approx_curve = dedup_points;
+                quad_found = true;
+                break;
             }
 
-            if (approx_curve.size() != 4)
+            if (!quad_found)
             {
-                continue;
+                std::vector<cv::Point> extrema_quad;
+                if (extract_quad_from_contour_extrema(raw_contour, extrema_quad) &&
+                    std::abs(contour_area(extrema_quad)) >= min_quad_area)
+                {
+                    approx_curve = extrema_quad;
+                    quad_found = true;
+                }
             }
 
-            if (!is_convex_polygon(approx_curve))
-            {
-                continue;
-            }
-
-            if (std::abs(contour_area(approx_curve)) < min_quad_area)
+            if (!quad_found)
             {
                 continue;
             }
@@ -678,7 +791,7 @@ int main(int argc, char **argv)
                 min_edge = std::min(min_edge, edge_len);
                 max_edge = std::max(max_edge, edge_len);
             }
-            if (min_edge < 1.0 || max_edge / min_edge > 2.5)
+            if (min_edge < 8.0 || max_edge / min_edge > max_quad_edge_ratio)
             {
                 continue;
             }
@@ -716,6 +829,33 @@ int main(int argc, char **argv)
             save_debug_image(debug_dir, frame_idx, "warped_binary_" + std::to_string(quad_counter), warped_binary);
 
             TagDecodeResult tag = decode_ar_tag_8x8(warped_binary);
+            if (!tag.valid)
+            {
+                continue;
+            }
+
+            cv::Point2f quad_center(0.0f, 0.0f);
+            for (const auto &p : approx_curve)
+            {
+                quad_center += cv::Point2f(static_cast<float>(p.x), static_cast<float>(p.y));
+            }
+            quad_center *= 0.25f;
+
+            bool is_duplicate = false;
+            for (const auto &existing_center : accepted_tag_centers)
+            {
+                if (cv::norm(quad_center - existing_center) < 35.0f)
+                {
+                    is_duplicate = true;
+                    break;
+                }
+            }
+            if (is_duplicate)
+            {
+                continue;
+            }
+            accepted_tag_centers.push_back(quad_center);
+
             if (enable_task2_overlay && tag.valid && !template_img.empty())
             {
                 overlay_template_on_frame(template_img, approx_curve, display);
@@ -746,12 +886,11 @@ int main(int argc, char **argv)
                 }
             }
 
-            const cv::Scalar quad_color = tag.valid ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 165, 255);
+            const cv::Scalar quad_color = cv::Scalar(0, 255, 0);
             cv::polylines(display, std::vector<std::vector<cv::Point>>(1, approx_curve), true, quad_color, 2);
 
-            std::string label = tag.valid ? ("ID: " + std::to_string(tag.id) + " " +
-                                             orientation_label(tag.clockwise_rotations_to_canonical))
-                                          : "ID: ?";
+            std::string label = "ID: " + std::to_string(tag.id) + " " +
+                                orientation_label(tag.clockwise_rotations_to_canonical);
             cv::putText(display, label, approx_curve[0], cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 0), 2);
 
             for (const auto &p : approx_curve)

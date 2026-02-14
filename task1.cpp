@@ -4,6 +4,7 @@
 #include <numeric>
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <stdexcept>
 
 // Custom RGB to grayscale conversion
@@ -546,25 +547,63 @@ void custom_sort_corners(std::vector<cv::Point> &corners)
         return;
 
     std::vector<cv::Point> sorted(4);
-    std::vector<int> sums, diffs;
+    int idx_tl = -1;
+    int idx_br = -1;
+    int min_sum = std::numeric_limits<int>::max();
+    int max_sum = std::numeric_limits<int>::min();
 
-    for (const auto &p : corners)
+    for (int i = 0; i < 4; ++i)
     {
-        sums.push_back(p.x + p.y);
-        diffs.push_back(p.y - p.x);
+        const int s = corners[i].x + corners[i].y;
+        if (s < min_sum)
+        {
+            min_sum = s;
+            idx_tl = i;
+        }
+        if (s > max_sum)
+        {
+            max_sum = s;
+            idx_br = i;
+        }
     }
 
-    // Top-Left: Minimum Sum
-    sorted[0] = corners[std::distance(sums.begin(), std::min_element(sums.begin(), sums.end()))];
+    if (idx_tl < 0 || idx_br < 0 || idx_tl == idx_br)
+    {
+        return;
+    }
 
-    // Top-Right: Minimum Difference (y - x) -> effectively (small y, large x)
-    sorted[1] = corners[std::distance(diffs.begin(), std::min_element(diffs.begin(), diffs.end()))];
+    sorted[0] = corners[idx_tl]; // TL
+    sorted[2] = corners[idx_br]; // BR
 
-    // Bottom-Right: Maximum Sum
-    sorted[2] = corners[std::distance(sums.begin(), std::max_element(sums.begin(), sums.end()))];
+    std::vector<int> rem_indices;
+    rem_indices.reserve(2);
+    for (int i = 0; i < 4; ++i)
+    {
+        if (i != idx_tl && i != idx_br)
+        {
+            rem_indices.push_back(i);
+        }
+    }
 
-    // Bottom-Left: Maximum Difference (y - x) -> effectively (large y, small x)
-    sorted[3] = corners[std::distance(diffs.begin(), std::max_element(diffs.begin(), diffs.end()))];
+    if (rem_indices.size() != 2)
+    {
+        return;
+    }
+
+    const cv::Point &a = corners[rem_indices[0]];
+    const cv::Point &b = corners[rem_indices[1]];
+
+    // Remaining two points are TR and BL. Use y-first ordering (tie-break on x).
+    if (a.y < b.y || (a.y == b.y && a.x > b.x))
+    {
+        sorted[1] = a; // TR
+        sorted[3] = b; // BL
+    }
+    else
+    {
+        sorted[1] = b; // TR
+        sorted[3] = a; // BL
+    }
 
     corners = sorted;
 }
@@ -817,7 +856,148 @@ cv::Mat rotate_binary_90_cw(const cv::Mat &src)
     return dst;
 }
 
-TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
+static bool find_center_dark_component_bbox(const cv::Mat &img, cv::Rect &bbox)
+{
+    bbox = cv::Rect();
+    if (img.empty() || img.type() != CV_8UC1)
+    {
+        return false;
+    }
+
+    const int rows = img.rows;
+    const int cols = img.cols;
+    const int cx = cols / 2;
+    const int cy = rows / 2;
+
+    auto is_dark = [&](int r, int c) -> bool
+    {
+        return img.at<uchar>(r, c) <= 127;
+    };
+
+    cv::Point seed(-1, -1);
+    if (is_dark(cy, cx))
+    {
+        seed = cv::Point(cx, cy);
+    }
+    else
+    {
+        const int max_radius = std::max(1, std::min(rows, cols) / 3);
+        for (int radius = 1; radius <= max_radius && seed.x < 0; ++radius)
+        {
+            const int x_min = cx - radius;
+            const int x_max = cx + radius;
+            const int y_min = cy - radius;
+            const int y_max = cy + radius;
+
+            for (int x = x_min; x <= x_max && seed.x < 0; ++x)
+            {
+                if (x < 0 || x >= cols)
+                    continue;
+                if (y_min >= 0 && is_dark(y_min, x))
+                    seed = cv::Point(x, y_min);
+                else if (y_max < rows && is_dark(y_max, x))
+                    seed = cv::Point(x, y_max);
+            }
+            for (int y = y_min + 1; y <= y_max - 1 && seed.x < 0; ++y)
+            {
+                if (y < 0 || y >= rows)
+                    continue;
+                if (x_min >= 0 && is_dark(y, x_min))
+                    seed = cv::Point(x_min, y);
+                else if (x_max < cols && is_dark(y, x_max))
+                    seed = cv::Point(x_max, y);
+            }
+        }
+    }
+
+    if (seed.x < 0)
+    {
+        return false;
+    }
+
+    cv::Mat visited = cv::Mat::zeros(rows, cols, CV_8UC1);
+    std::vector<cv::Point> stack;
+    stack.reserve((rows * cols) / 16);
+    stack.push_back(seed);
+    visited.at<uchar>(seed.y, seed.x) = 1;
+
+    int min_x = seed.x;
+    int max_x = seed.x;
+    int min_y = seed.y;
+    int max_y = seed.y;
+    int area = 0;
+
+    const int dr[4] = {-1, 1, 0, 0};
+    const int dc[4] = {0, 0, -1, 1};
+
+    while (!stack.empty())
+    {
+        const cv::Point p = stack.back();
+        stack.pop_back();
+        ++area;
+
+        min_x = std::min(min_x, p.x);
+        max_x = std::max(max_x, p.x);
+        min_y = std::min(min_y, p.y);
+        max_y = std::max(max_y, p.y);
+
+        for (int k = 0; k < 4; ++k)
+        {
+            const int nr = p.y + dr[k];
+            const int nc = p.x + dc[k];
+            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols)
+            {
+                continue;
+            }
+            if (visited.at<uchar>(nr, nc) != 0)
+            {
+                continue;
+            }
+            visited.at<uchar>(nr, nc) = 1;
+            if (is_dark(nr, nc))
+            {
+                stack.push_back(cv::Point(nc, nr));
+            }
+        }
+    }
+
+    const int w = max_x - min_x + 1;
+    const int h = max_y - min_y + 1;
+    if (area < std::max(10, (rows * cols) / 200) ||
+        w < std::max(6, cols / 12) ||
+        h < std::max(6, rows / 12))
+    {
+        return false;
+    }
+
+    const double aspect = static_cast<double>(w) / static_cast<double>(h);
+    if (aspect < 0.5 || aspect > 2.0)
+    {
+        return false;
+    }
+
+    const int pad_x = std::max(2, w / 8);
+    const int pad_y = std::max(2, h / 8);
+    min_x = std::max(0, min_x - pad_x);
+    max_x = std::min(cols - 1, max_x + pad_x);
+    min_y = std::max(0, min_y - pad_y);
+    max_y = std::min(rows - 1, max_y + pad_y);
+
+    int side = std::max(max_x - min_x + 1, max_y - min_y + 1);
+    side = std::min(side, std::min(cols, rows));
+
+    const int center_x = (min_x + max_x) / 2;
+    const int center_y = (min_y + max_y) / 2;
+    int x0 = center_x - side / 2;
+    int y0 = center_y - side / 2;
+    x0 = std::max(0, std::min(x0, cols - side));
+    y0 = std::max(0, std::min(y0, rows - side));
+
+    bbox = cv::Rect(x0, y0, side, side);
+    return bbox.width >= 8 && bbox.height >= 8;
+}
+
+static TagDecodeResult decode_ar_tag_8x8_internal(const cv::Mat &warped_binary, int depth)
 {
     TagDecodeResult result;
     if (warped_binary.empty() || warped_binary.type() != CV_8UC1 || warped_binary.rows != warped_binary.cols)
@@ -831,22 +1011,33 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
         return result;
     }
 
-    auto sample_cell = [&](const cv::Mat &img, int row, int col) -> int
+    auto sample_cell_white_ratio = [&](const cv::Mat &img, int row, int col) -> double
     {
         const int cell_h = img.rows / grid_size;
         const int cell_w = img.cols / grid_size;
         if (cell_h == 0 || cell_w == 0)
         {
-            return 0;
+            return 0.0;
         }
 
         const int y0 = row * cell_h;
         const int x0 = col * cell_w;
 
-        const int y_start = y0 + cell_h / 4;
-        const int y_end = std::min(y0 + (3 * cell_h) / 4, img.rows);
-        const int x_start = x0 + cell_w / 4;
-        const int x_end = std::min(x0 + (3 * cell_w) / 4, img.cols);
+        int y_start = y0 + cell_h / 3;
+        int y_end = std::min(y0 + (2 * cell_h) / 3, img.rows);
+        int x_start = x0 + cell_w / 3;
+        int x_end = std::min(x0 + (2 * cell_w) / 3, img.cols);
+
+        if (y_end <= y_start)
+        {
+            y_start = y0;
+            y_end = std::min(y0 + cell_h, img.rows);
+        }
+        if (x_end <= x_start)
+        {
+            x_start = x0;
+            x_end = std::min(x0 + cell_w, img.cols);
+        }
 
         int white_count = 0;
         int total = 0;
@@ -867,7 +1058,12 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
             return 0;
         }
 
-        return (white_count * 2 >= total) ? 1 : 0;
+        return static_cast<double>(white_count) / static_cast<double>(total);
+    };
+
+    auto sample_cell_bit = [&](const cv::Mat &img, int row, int col) -> int
+    {
+        return sample_cell_white_ratio(img, row, col) >= 0.55 ? 1 : 0;
     };
 
     int border_white_cells = 0;
@@ -877,13 +1073,29 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
         {
             if (r == 0 || c == 0 || r == grid_size - 1 || c == grid_size - 1)
             {
-                border_white_cells += sample_cell(warped_binary, r, c);
+                border_white_cells += sample_cell_bit(warped_binary, r, c);
             }
         }
     }
 
-    if (border_white_cells > 2)
+    // Keep this tolerant to blur/perspective leakage while still rejecting white-bordered quads.
+    if (border_white_cells > 10)
     {
+        // If the quad was around the white sheet instead of the inner black tag,
+        // crop the dark connected component near the center and retry once.
+        if (depth < 1)
+        {
+            cv::Rect dark_bbox;
+            if (find_center_dark_component_bbox(warped_binary, dark_bbox))
+            {
+                cv::Mat cropped = warped_binary(dark_bbox).clone();
+                TagDecodeResult retry = decode_ar_tag_8x8_internal(cropped, depth + 1);
+                if (retry.valid)
+                {
+                    return retry;
+                }
+            }
+        }
         return result;
     }
 
@@ -898,21 +1110,50 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
     int marker_sum = 0;
     for (int i = 0; i < 4; ++i)
     {
-        marker_bits[i] = sample_cell(warped_binary, marker_cells[i].first, marker_cells[i].second);
+        marker_bits[i] = sample_cell_bit(warped_binary, marker_cells[i].first, marker_cells[i].second);
         marker_sum += marker_bits[i];
     }
 
-    if (marker_sum != 1)
+    int marker_index = -1;
+    if (marker_sum == 1)
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            if (marker_bits[i] == 1)
+            {
+                marker_index = i;
+                break;
+            }
+        }
+    }
+    else if (marker_sum == 3)
+    {
+        // Some tags are encoded with a single dark orientation corner.
+        for (int i = 0; i < 4; ++i)
+        {
+            if (marker_bits[i] == 0)
+            {
+                marker_index = i;
+                break;
+            }
+        }
+    }
+    else
+    {
+        return result;
+    }
+
+    if (marker_index < 0)
     {
         return result;
     }
 
     int rotations = 0;
-    if (marker_bits[2] == 1)
+    if (marker_index == 2)
         rotations = 0; // already BR
-    else if (marker_bits[1] == 1)
+    else if (marker_index == 1)
         rotations = 1; // TR -> BR
-    else if (marker_bits[0] == 1)
+    else if (marker_index == 0)
         rotations = 2; // TL -> BR
     else
         rotations = 3; // BL -> BR
@@ -923,13 +1164,18 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
         canonical = rotate_binary_90_cw(canonical);
     }
 
-    const int b0 = sample_cell(canonical, 3, 3);
-    const int b1 = sample_cell(canonical, 3, 4);
-    const int b2 = sample_cell(canonical, 4, 4);
-    const int b3 = sample_cell(canonical, 4, 3);
+    const int b0 = sample_cell_bit(canonical, 3, 3);
+    const int b1 = sample_cell_bit(canonical, 3, 4);
+    const int b2 = sample_cell_bit(canonical, 4, 4);
+    const int b3 = sample_cell_bit(canonical, 4, 3);
 
     result.valid = true;
     result.id = (b0 << 3) | (b1 << 2) | (b2 << 1) | b3;
     result.clockwise_rotations_to_canonical = rotations;
     return result;
+}
+
+TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
+{
+    return decode_ar_tag_8x8_internal(warped_binary, 0);
 }
