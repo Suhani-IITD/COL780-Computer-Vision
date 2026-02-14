@@ -53,6 +53,12 @@ This project can run on Windows using MSYS2 (UCRT64 toolchain).
 ```powershell
 .\scripts\build_windows.ps1
 ```
+4. Intrinsics file:
+- `camera_intrinsics.yml` is now included in repo as an approximate default (generated from video resolution).
+- For better Task 3 pose quality, generate a real calibration file with a chessboard:
+```bash
+python3 scripts/calibrate_camera.py --source 0 --pattern 9x6 --min-frames 20 --output camera_intrinsics.yml
+```
 
 ## How To Test
 Run provided videos:
@@ -81,6 +87,10 @@ Windows test equivalents:
 ```powershell
 .\scripts\test_windows.ps1
 .\scripts\test_windows.ps1 -Source multipleTags.mp4
+```
+
+Optional full test (only if these files exist locally):
+```powershell
 .\scripts\test_windows.ps1 -Source Tag0.mp4 -Template iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj wolf.obj
 ```
 

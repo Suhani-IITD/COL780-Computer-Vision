@@ -97,9 +97,20 @@ Run in PowerShell from repo root:
 .\scripts\test_windows.ps1
 ```
 
+Intrinsics note:
+- `camera_intrinsics.yml` exists in the repo as an approximate default so Task 3 runs immediately.
+- For accurate 3D alignment, regenerate `camera_intrinsics.yml` using chessboard calibration:
+```bash
+python3 scripts/calibrate_camera.py --source 0 --pattern 9x6 --min-frames 20 --output camera_intrinsics.yml
+```
+
 Extra examples:
 ```powershell
 .\scripts\test_windows.ps1 -Source multipleTags.mp4
+```
+
+Optional full example (only if you downloaded these files):
+```powershell
 .\scripts\test_windows.ps1 -Source Tag0.mp4 -Template iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj wolf.obj
 ```
 
