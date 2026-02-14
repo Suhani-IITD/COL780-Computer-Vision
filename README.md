@@ -36,6 +36,22 @@ make clean && make
 python3 scripts/calibrate_camera.py --source 0 --pattern 9x6 --min-frames 20 --output camera_intrinsics.yml
 ```
 
+## Setup (Windows Native)
+This project can run on Windows using MSYS2 (UCRT64 toolchain).
+
+1. Verify dependencies:
+```powershell
+.\scripts\setup_windows_deps.ps1
+```
+2. Install missing dependencies:
+```powershell
+.\scripts\setup_windows_deps.ps1 -Install
+```
+3. Build:
+```powershell
+.\scripts\build_windows.ps1
+```
+
 ## How To Test
 Run provided videos:
 ```bash
@@ -57,6 +73,13 @@ Use helper runner:
 Webcam test:
 ```bash
 ./ar_tag_detector 0
+```
+
+Windows test equivalents:
+```powershell
+.\scripts\test_windows.ps1
+.\scripts\test_windows.ps1 -Source multipleTags.mp4
+.\scripts\test_windows.ps1 -Source Tag0.mp4 -Template iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj wolf.obj
 ```
 
 Expected checks:
