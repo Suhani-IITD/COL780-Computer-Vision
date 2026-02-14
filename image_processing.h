@@ -4,6 +4,14 @@
 #include <opencv2/opencv.hpp>
 
 typedef std::vector<cv::Point> Contour;
+
+struct TagDecodeResult
+{
+    bool valid = false;
+    int id = -1;
+    int clockwise_rotations_to_canonical = 0;
+};
+
 // Custom image processing functions implemented from scratch
 cv::Mat rgbToGray(const cv::Mat &src);
 cv::Mat custom_blur_separable(const cv::Mat &src, int kernel_size, double sigma);
@@ -21,7 +29,11 @@ void rdp_simplify(const std::vector<cv::Point> &points, std::vector<cv::Point> &
 void draw_contours_custom(cv::Mat &image,
                           const std::vector<std::vector<cv::Point>> &contours,
                           int thickness);
+double contour_area(const std::vector<cv::Point> &polygon);
+bool is_convex_polygon(const std::vector<cv::Point> &polygon);
 cv::Mat custom_compute_homography(const std::vector<cv::Point2f> &src_points, const std::vector<cv::Point2f> &dst_points);
 void custom_warp_perspective(const cv::Mat &src, cv::Mat &dst, const cv::Mat &H, cv::Size size);
+cv::Mat rotate_binary_90_cw(const cv::Mat &src);
+TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary);
 
 #endif // IMAGE_PROCESSING_H

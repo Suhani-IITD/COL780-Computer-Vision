@@ -1,316 +1,393 @@
 #include <iostream>
+#include <string>
+#include <vector>
+#include <cmath>
 #include <opencv2/opencv.hpp>
-#include "image_processing.h" // Our custom functions (currently unused, but kept for future)
-#include "test_functions.h"   // OpenCV's built-in functions for comparison and pipeline demo
+#include "image_processing.h"
+
+static cv::Mat default_intrinsics_for_frame(const cv::Size &frame_size)
+{
+    const double fx = static_cast<double>(frame_size.width);
+    const double fy = static_cast<double>(frame_size.width);
+    const double cx = static_cast<double>(frame_size.width) * 0.5;
+    const double cy = static_cast<double>(frame_size.height) * 0.5;
+
+    return (cv::Mat_<double>(3, 3) <<
+            fx, 0.0, cx,
+            0.0, fy, cy,
+            0.0, 0.0, 1.0);
+}
+
+static cv::Mat load_intrinsics_matrix(const std::string &path)
+{
+    cv::FileStorage fs(path, cv::FileStorage::READ);
+    if (!fs.isOpened())
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat K;
+    fs["K"] >> K;
+    if (K.empty())
+    {
+        fs["camera_matrix"] >> K;
+    }
+    if (K.rows != 3 || K.cols != 3)
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat K64;
+    K.convertTo(K64, CV_64F);
+    return K64;
+}
+
+static bool estimate_pose_from_homography(const cv::Mat &H,
+                                          const cv::Mat &K,
+                                          cv::Mat &R,
+                                          cv::Mat &t)
+{
+    if (H.empty() || K.empty())
+    {
+        return false;
+    }
+
+    cv::Mat H64, K64;
+    H.convertTo(H64, CV_64F);
+    K.convertTo(K64, CV_64F);
+
+    cv::Mat K_inv = K64.inv();
+    cv::Mat h1 = H64.col(0);
+    cv::Mat h2 = H64.col(1);
+    cv::Mat h3 = H64.col(2);
+
+    cv::Mat r1 = K_inv * h1;
+    cv::Mat r2 = K_inv * h2;
+    cv::Mat t_raw = K_inv * h3;
+
+    const double n1 = cv::norm(r1);
+    const double n2 = cv::norm(r2);
+    if (n1 < 1e-9 || n2 < 1e-9)
+    {
+        return false;
+    }
+
+    const double scale = 2.0 / (n1 + n2);
+    r1 = scale * r1;
+    r2 = scale * r2;
+    t = scale * t_raw;
+
+    cv::Mat r3 = r1.cross(r2);
+    cv::Mat R_approx(3, 3, CV_64F);
+    r1.copyTo(R_approx.col(0));
+    r2.copyTo(R_approx.col(1));
+    r3.copyTo(R_approx.col(2));
+
+    cv::SVD svd(R_approx);
+    R = svd.u * svd.vt;
+    if (cv::determinant(R) < 0.0)
+    {
+        R.col(2) = -R.col(2);
+    }
+
+    return true;
+}
+
+static bool project_point(const cv::Point3f &world,
+                          const cv::Mat &R,
+                          const cv::Mat &t,
+                          const cv::Mat &K,
+                          cv::Point &pixel)
+{
+    cv::Mat X = (cv::Mat_<double>(3, 1) << static_cast<double>(world.x),
+                 static_cast<double>(world.y),
+                 static_cast<double>(world.z));
+
+    cv::Mat camera = R * X + t;
+    const double z = camera.at<double>(2, 0);
+    if (z <= 1e-6)
+    {
+        return false;
+    }
+
+    cv::Mat uvw = K * camera;
+    const int u = static_cast<int>(std::lround(uvw.at<double>(0, 0) / uvw.at<double>(2, 0)));
+    const int v = static_cast<int>(std::lround(uvw.at<double>(1, 0) / uvw.at<double>(2, 0)));
+    pixel = cv::Point(u, v);
+    return true;
+}
+
+static void draw_cube(cv::Mat &image,
+                      const cv::Mat &R,
+                      const cv::Mat &t,
+                      const cv::Mat &K,
+                      float cube_size)
+{
+    const std::vector<cv::Point3f> cube_points = {
+        cv::Point3f(0.0f, 0.0f, 0.0f),
+        cv::Point3f(cube_size, 0.0f, 0.0f),
+        cv::Point3f(cube_size, cube_size, 0.0f),
+        cv::Point3f(0.0f, cube_size, 0.0f),
+        cv::Point3f(0.0f, 0.0f, -cube_size),
+        cv::Point3f(cube_size, 0.0f, -cube_size),
+        cv::Point3f(cube_size, cube_size, -cube_size),
+        cv::Point3f(0.0f, cube_size, -cube_size)};
+
+    std::vector<cv::Point> projected(8);
+    for (size_t i = 0; i < cube_points.size(); ++i)
+    {
+        if (!project_point(cube_points[i], R, t, K, projected[i]))
+        {
+            return;
+        }
+    }
+
+    const cv::Scalar base_color(0, 255, 255);
+    const cv::Scalar pillar_color(0, 0, 255);
+    const cv::Scalar top_color(255, 0, 0);
+
+    for (int i = 0; i < 4; ++i)
+    {
+        cv::line(image, projected[i], projected[(i + 1) % 4], base_color, 2);
+        cv::line(image, projected[i + 4], projected[4 + (i + 1) % 4], top_color, 2);
+        cv::line(image, projected[i], projected[i + 4], pillar_color, 2);
+    }
+}
+
+static void overlay_template_on_frame(const cv::Mat &template_img,
+                                      const std::vector<cv::Point> &quad_corners,
+                                      cv::Mat &display)
+{
+    if (template_img.empty() || quad_corners.size() != 4 || display.empty())
+    {
+        return;
+    }
+
+    std::vector<cv::Point2f> src_template = {
+        cv::Point2f(0.0f, 0.0f),
+        cv::Point2f(static_cast<float>(template_img.cols - 1), 0.0f),
+        cv::Point2f(static_cast<float>(template_img.cols - 1), static_cast<float>(template_img.rows - 1)),
+        cv::Point2f(0.0f, static_cast<float>(template_img.rows - 1))};
+
+    std::vector<cv::Point2f> dst_frame;
+    dst_frame.reserve(4);
+    for (const auto &p : quad_corners)
+    {
+        dst_frame.push_back(cv::Point2f(static_cast<float>(p.x), static_cast<float>(p.y)));
+    }
+
+    cv::Mat H_template_to_frame = custom_compute_homography(src_template, dst_frame);
+    if (H_template_to_frame.empty())
+    {
+        return;
+    }
+
+    cv::Mat warped_template;
+    custom_warp_perspective(template_img, warped_template, H_template_to_frame, display.size());
+    if (warped_template.empty())
+    {
+        return;
+    }
+
+    cv::Mat warped_gray = rgbToGray(warped_template);
+    cv::Mat mask = custom_threshold(warped_gray, 10);
+
+    for (int r = 0; r < display.rows; ++r)
+    {
+        for (int c = 0; c < display.cols; ++c)
+        {
+            if (mask.at<uchar>(r, c) == 255)
+            {
+                display.at<cv::Vec3b>(r, c) = warped_template.at<cv::Vec3b>(r, c);
+            }
+        }
+    }
+}
 
 int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        std::cout << "Usage: " << argv[0] << " <video_path>" << std::endl;
+        std::cout << "Usage: " << argv[0] << " <video_path> [template_image] [intrinsics_yml]" << std::endl;
         return -1;
     }
 
-    std::cout << "Attempting to open video: " << argv[1] << std::endl;
     cv::VideoCapture cap(argv[1]);
-
     if (!cap.isOpened())
     {
         std::cout << "Error: Could not open video file: " << argv[1] << std::endl;
-        std::flush(std::cout); // Explicitly flush output
         return -1;
     }
 
-    std::cout << "Video opened successfully." << std::endl;
-    std::flush(std::cout); // Explicitly flush output
+    cv::Mat template_img;
+    std::string intrinsics_path = "camera_intrinsics.yml";
+    if (argc >= 3)
+    {
+        template_img = cv::imread(argv[2], cv::IMREAD_COLOR);
+        if (template_img.empty())
+        {
+            std::cout << "Warning: Could not open template image: " << argv[2] << std::endl;
+        }
+    }
+    if (argc >= 4)
+    {
+        intrinsics_path = argv[3];
+    }
 
-    
+    cv::Mat K = load_intrinsics_matrix(intrinsics_path);
+    bool intrinsics_logged = false;
+
+    const int blur_kernel_size = 5;
+    const double blur_sigma = 1.4;
+    const uchar threshold_val = 50;
+    const int min_quad_area = 500;
+    const cv::Size canonical_tag_size(200, 200);
+
     cv::Mat frame;
     while (true)
     {
-        cap >> frame; // Read a new frame from the video
-
+        cap >> frame;
         if (frame.empty())
         {
-            std::cout << "Frame empty, breaking loop." << std::endl;
-            std::flush(std::cout); // Explicitly flush output
             break;
         }
-
-        std::cout << "Processing frame..." << std::endl;
-        std::flush(std::cout); // Explicitly flush output
-
-        // --- Parameters ---
-        int blur_kernel_size = 5;
-        double blur_sigma = 1.4;
-        uchar threshold_val = 50; // For simple thresholding
-
-        // --- CUSTOM PIPELINE DEMONSTRATION ---
-
-        cv::Mat custome_gray = rgbToGray(frame);
-        cv::Mat custom_blurred = custom_blur_separable(custome_gray, blur_kernel_size, blur_sigma);
-        cv::Mat custom_sobel_edges = sobel_edge_detection(custom_blurred);
-        cv::Mat custom_binary_for_contours = custom_threshold(custom_sobel_edges, threshold_val);
-        std::vector<std::vector<cv::Point>> custom_detected_contours = detect_contours_opencv_style(custom_binary_for_contours);
-
-        // polygon approximation using rdp
-
-        cv::Mat custom_contours_display_frame = frame.clone();
-
-        std::vector<Contour> simplified_contours;
-        for (const auto &current_raw_contour : custom_detected_contours)
+        if (K.empty())
         {
+            K = default_intrinsics_for_frame(frame.size());
+            if (!intrinsics_logged)
+            {
+                std::cout << "Using default camera intrinsics. Provide " << intrinsics_path
+                          << " for calibrated Task 3 results." << std::endl;
+                intrinsics_logged = true;
+            }
+        }
+        else if (!intrinsics_logged)
+        {
+            std::cout << "Loaded camera intrinsics from: " << intrinsics_path << std::endl;
+            intrinsics_logged = true;
+        }
 
-            // A. Calculate Epsilon (Threshold)
-            // "I want the simplified shape to be within 2% error of the original."
-            double perimeter = get_contour_perimeter(current_raw_contour);
+        cv::Mat gray = rgbToGray(frame);
+        cv::Mat blurred = custom_blur_separable(gray, blur_kernel_size, blur_sigma);
+        cv::Mat sobel_edges = sobel_edge_detection(blurred);
+        cv::Mat binary_for_contours = custom_threshold(sobel_edges, threshold_val);
+        std::vector<std::vector<cv::Point>> detected_contours = detect_contours(binary_for_contours);
+
+        cv::Mat display = frame.clone();
+        bool warped_shown = false;
+
+        for (const auto &raw_contour : detected_contours)
+        {
+            if (raw_contour.size() < 40)
+            {
+                continue;
+            }
+
+            const double perimeter = get_contour_perimeter(raw_contour);
             double epsilon = 0.02 * perimeter;
 
-            // B. Simplify (Reduce 1000 points -> 4 points)
             std::vector<cv::Point> approx_curve;
-            rdp_simplify(current_raw_contour, approx_curve, epsilon);
-            // cv::approxPolyDP(current_raw_contour, approx_curve, epsilon, true);
-            // C. Store it
-            // We only care if it simplified to a Triangle(3), Quad(4), or Hexagon(6) etc.
-            // For AR tags, we specifically look for 4 points.
-            simplified_contours.push_back(approx_curve);
+            rdp_simplify(raw_contour, approx_curve, epsilon);
+            if (approx_curve.size() > 4)
+            {
+                rdp_simplify(raw_contour, approx_curve, epsilon * 1.5);
+            }
 
-            std::cout << "Contour with " << current_raw_contour.size() << " points simplified to " << approx_curve.size() << " points." << std::endl;
-            std::flush(std::cout); // Explicitly flush output
-                                   // Visual Debugging
+            if (approx_curve.size() != 4)
+            {
+                continue;
+            }
+
+            if (!is_convex_polygon(approx_curve))
+            {
+                continue;
+            }
+
+            if (std::abs(contour_area(approx_curve)) < min_quad_area)
+            {
+                continue;
+            }
+
+            sort_corners(approx_curve);
+
+            std::vector<cv::Point2f> src_points;
+            src_points.reserve(4);
             for (const auto &p : approx_curve)
             {
-                cv::circle(custom_contours_display_frame, p, 5, cv::Scalar(0, 0, 255), -1); // Red dots on corners
+                src_points.push_back(cv::Point2f(static_cast<float>(p.x), static_cast<float>(p.y)));
             }
-            // Show the text of how many points it found
-            cv::putText(custom_contours_display_frame, std::to_string(approx_curve.size()), approx_curve[0],
-                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 0), 2);
-            // Optional: Filter immediately
-            if (approx_curve.size() >= 4 && approx_curve.size() <= 6 &&
-                cv::isContourConvex(approx_curve) &&
-                cv::contourArea(approx_curve) > 500)
-            { // Lower area threshold
 
-                // FORCE TO 4 CORNERS: Use Convex Hull or Bounding Box logic
-                // Quick Fix: If size > 4, re-run RDP with higher epsilon
-                if (approx_curve.size() > 4)
+            std::vector<cv::Point2f> dst_points = {
+                cv::Point2f(0.0f, 0.0f),
+                cv::Point2f(static_cast<float>(canonical_tag_size.width - 1), 0.0f),
+                cv::Point2f(static_cast<float>(canonical_tag_size.width - 1), static_cast<float>(canonical_tag_size.height - 1)),
+                cv::Point2f(0.0f, static_cast<float>(canonical_tag_size.height - 1))};
+
+            cv::Mat H = custom_compute_homography(src_points, dst_points);
+            if (H.empty())
+            {
+                continue;
+            }
+
+            cv::Mat warped_tag;
+            custom_warp_perspective(frame, warped_tag, H, canonical_tag_size);
+            if (warped_tag.empty())
+            {
+                continue;
+            }
+
+            cv::Mat warped_gray = rgbToGray(warped_tag);
+            cv::Mat warped_binary = custom_threshold(custom_blur_separable(warped_gray, 5, 1.0), 150);
+
+            TagDecodeResult tag = decode_ar_tag_8x8(warped_binary);
+            if (tag.valid && !template_img.empty())
+            {
+                overlay_template_on_frame(template_img, approx_curve, display);
+            }
+            if (tag.valid)
+            {
+                const std::vector<cv::Point2f> tag_plane = {
+                    cv::Point2f(0.0f, 0.0f),
+                    cv::Point2f(1.0f, 0.0f),
+                    cv::Point2f(1.0f, 1.0f),
+                    cv::Point2f(0.0f, 1.0f)};
+
+                cv::Mat H_tag_to_frame = custom_compute_homography(tag_plane, src_points);
+                cv::Mat R, t;
+                if (!H_tag_to_frame.empty() && estimate_pose_from_homography(H_tag_to_frame, K, R, t))
                 {
-                    rdp_simplify(current_raw_contour, approx_curve, epsilon * 1.5); // Try harder
-                    // cv::approxPolyDP(current_raw_contour, approx_curve, epsilon * 1.5, true);
+                    draw_cube(display, R, t, K, 1.0f);
                 }
-                std::cout << "Found a potential tag with 4 corners lesgoo!" << std::endl;
-                std::flush(std::cout); // Explicitly flush output
+            }
 
-                // 2. ORDER CORNERS (TL, TR, BR, BL)
-                sort_corners(approx_curve);
+            const cv::Scalar quad_color = tag.valid ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 165, 255);
+            cv::polylines(display, std::vector<std::vector<cv::Point>>(1, approx_curve), true, quad_color, 2);
 
-                // 3. PREPARE INPUTS
-                // Convert to float for Homography math
-                std::vector<cv::Point2f> src_points;
-                for (const auto &p : approx_curve)
-                    src_points.push_back(cv::Point2f(p));
+            std::string label = tag.valid ? ("ID: " + std::to_string(tag.id)) : "ID: ?";
+            cv::putText(display, label, approx_curve[0], cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 0), 2);
 
-                // Define Destination (Flat 200x200 Square)
-                std::vector<cv::Point2f> dst_points = {
-                    cv::Point2f(0, 0), cv::Point2f(200, 0), cv::Point2f(200, 200), cv::Point2f(0, 200)};
+            for (const auto &p : approx_curve)
+            {
+                cv::circle(display, p, 4, cv::Scalar(0, 0, 255), -1);
+            }
 
-                std::cout << "Source Points:" << std::endl;
-                for (const auto &p : src_points)
-                {
-                    std::cout << p << std::endl;
-                }
-
-                // draw dots on the src points and cv::imshow
-                // cv::Mat src_points_display = frame.clone();
-                // for (const auto &p : src_points){
-                //     cv::circle(src_points_display, p, 5, cv::Scalar(255, 0, 255), -1); // Magenta dots
-                // }
-                // cv::imshow("Source Points", src_points_display);
-
-                cv::Mat H = custom_compute_homography(src_points, dst_points);
-
-                // 5. WARP (Get the flat tag image)
-                if (!H.empty())
-                {
-                    cv::Mat warped_tag;
-                    // OpenCV:
-                    custom_warp_perspective(frame, warped_tag, H, cv::Size(200, 200));
-                    cv::Mat binary_warped_tag = custom_threshold(custom_blur_separable(rgbToGray(warped_tag), 5, 1.0), 150); // Optional: Threshold to make it more binary and clear
-                    cv::imshow("Binary Warped Tag", binary_warped_tag);
-                    // warped_tag = custom_threshold(warped_tag, 150); // Optional: Threshold to make it more binary and clear
-
-                    // Custom:
-                    // warped_tag = custom_warpPerspective(frame, H, cv::Size(200, 200));
-
-                    // Show the result!
-                    cv::imshow("Detected Tag", warped_tag);
-                }
+            if (!warped_shown)
+            {
+                cv::imshow("Warped Binary Tag", warped_binary);
+                cv::imshow("Warped Tag", warped_tag);
+                warped_shown = true;
             }
         }
 
-        draw_contours_custom(custom_contours_display_frame, simplified_contours, 2);
-        // draw_contours_custom(custom_contours_display_frame, custom_detected_contours, 2);
-        // cv::drawContours(custom_contours_display_frame, simplified_contours, -1, cv::Scalar(255, 0, 0), 2); // Draw in blue for visibility
-        cv::imshow("Custom Native Contours", custom_contours_display_frame);
-
-        // --- OPENCV NATIVE PIPELINE DEMONSTRATION ---
-
-        // 1. Grayscale & Blur
-        cv::Mat cv_gray = cv_rgbToGray(frame);
-        cv::Mat cv_blurred = cv_custom_blur_separable(cv_gray, blur_kernel_size, blur_sigma);
-
-        // 2. Edge Detection (Sobel)
-        cv::Mat cv_sobel_edges = cv_sobel_edge_detection(cv_blurred);
-        // cv::imshow("OpenCV Sobel Edges", cv_sobel_edges);
-
-        // 3. Thresholding for Contours (to get binary image)
-        cv::Mat cv_binary_for_contours = cv_custom_threshold(cv_sobel_edges, threshold_val);
-        // cv::imshow("OpenCV Binary for Contours", cv_binary_for_contours);
-
-        // 4. Contour Detection
-        std::vector<std::vector<cv::Point>> cv_own_detected_contours = cv_find_contours(cv_binary_for_contours);
-
-        std::vector<std::vector<cv::Point>> cv_detected_contours = cv_find_contours(cv_binary_for_contours);
-        cv::Mat cv_contours_display_frame = frame.clone();
-
-        std::vector<Contour> cv_simplified_contours;
-        for (const auto &current_raw_contour : cv_detected_contours)
-        {
-
-            // A. Calculate Epsilon (Threshold)
-            // "I want the simplified shape to be within 2% error of the original."
-            double perimeter = get_contour_perimeter(current_raw_contour);
-            double epsilon = 0.02 * perimeter;
-
-            // B. Simplify (Reduce 1000 points -> 4 points)
-            std::vector<cv::Point> approx_curve;
-            rdp_simplify(current_raw_contour, approx_curve, epsilon);
-            // cv::approxPolyDP(current_raw_contour, approx_curve, epsilon, true);
-            // C. Store it
-            // We only care if it simplified to a Triangle(3), Quad(4), or Hexagon(6) etc.
-            // For AR tags, we specifically look for 4 points.
-            cv_simplified_contours.push_back(approx_curve);
-
-            std::cout << "CV Contour with " << current_raw_contour.size() << " points simplified to " << approx_curve.size() << " points." << std::endl;
-            std::flush(std::cout); // Explicitly flush output
-                                   // Visual Debugging
-            for (const auto &p : approx_curve)
-            {
-                cv::circle(cv_contours_display_frame, p, 5, cv::Scalar(0, 0, 255), -1); // Red dots on corners
-            }
-            // Show the text of how many points it found
-            cv::putText(cv_contours_display_frame, std::to_string(approx_curve.size()), approx_curve[0],
-                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 0), 2);
-            // Optional: Filter immediately
-            if (approx_curve.size() >= 4 && approx_curve.size() <= 6 &&
-                cv::isContourConvex(approx_curve) &&
-                cv::contourArea(approx_curve) > 500)
-            { // Lower area threshold
-
-                // FORCE TO 4 CORNERS: Use Convex Hull or Bounding Box logic
-                // Quick Fix: If size > 4, re-run RDP with higher epsilon
-                if (approx_curve.size() > 4)
-                {
-                    rdp_simplify(current_raw_contour, approx_curve, epsilon * 1.5); // Try harder
-                    // cv::approxPolyDP(current_raw_contour, approx_curve, epsilon * 1.5, true);
-                }
-                std::cout << "Found a potential tag with 4 corners!" << std::endl;
-                std::flush(std::cout); // Explicitly flush output
-
-                // 2. ORDER CORNERS (TL, TR, BR, BL)
-                sort_corners(approx_curve);
-
-                // 3. PREPARE INPUTS
-                // Convert to float for Homography math
-                std::vector<cv::Point2f> src_points;
-                for (const auto &p : approx_curve)
-                    src_points.push_back(cv::Point2f(p));
-
-                // Define Destination (Flat 200x200 Square)
-                std::vector<cv::Point2f> dst_points = {
-                    cv::Point2f(0, 0), cv::Point2f(200, 0), cv::Point2f(200, 200), cv::Point2f(0, 200)};
-
-                // 4. COMPUTE HOMOGRAPHY
-                // Using OpenCV:
-                cv::Mat H = custom_compute_homography(src_points, dst_points);
-
-                // Using Custom (if you implement the SVD solver described previously):
-                // cv::Mat H = custom_computeHomography(src_points, dst_points);
-
-                // 5. WARP (Get the flat tag image)
-                if (!H.empty())
-                {
-                    cv::Mat cv_warped_tag;
-                    // OpenCV:
-                    custom_warp_perspective(frame, cv_warped_tag, H, cv::Size(200, 200));
-
-                    // Custom:
-                    // warped_tag = custom_warpPerspective(frame, H, cv::Size(200, 200));
-
-                    // Show the result!
-                    cv::imshow("CV Detected Tag", cv_warped_tag);
-                }
-            }
-        }
-
-        cv::Mat cv_drawn_contours_frame = frame.clone();
-
-        draw_contours_custom(cv_contours_display_frame, cv_detected_contours, 2);
-
-        cv::drawContours(cv_drawn_contours_frame, cv_own_detected_contours, -1, cv::Scalar(0, 255, 0), 2); // Draw contours in green
-        // cv::imshow("OpenCV Native Contours", cv_contours_display_frame);
-        // cv::imshow("OpenCV Own Contours", cv_drawn_contours_frame);
-
-        // 6. Homography Demonstration
-        // cv::Mat homography_display_frame = frame.clone();
-        // // For demonstration, let's assume a square region on the screen as our 'tag'
-        // std::vector<cv::Point2f> src_points_on_frame = {
-        //     cv::Point2f(200, 100), // Top-left
-        //     cv::Point2f(400, 100), // Top-right
-        //     cv::Point2f(400, 300), // Bottom-right
-        //     cv::Point2f(200, 300)  // Bottom-left
-        // };
-        // // Draw source points
-        // for(size_t i = 0; i < src_points_on_frame.size(); ++i) {
-        //     cv::circle(homography_display_frame, src_points_on_frame[i], 5, cv::Scalar(0, 0, 255), -1); // Red
-        // }
-        // cv::polylines(homography_display_frame, std::vector<std::vector<cv::Point>>(1, std::vector<cv::Point>(src_points_on_frame.begin(), src_points_on_frame.end())), true, cv::Scalar(0, 0, 255), 2);
-
-        // // Target points (a standard square, e.g., for mapping a tag)
-        // std::vector<cv::Point2f> dst_points_for_homography = {
-        //     cv::Point2f(0, 0),
-        //     cv::Point2f(sample_image.cols, 0),
-        //     cv::Point2f(sample_image.cols, sample_image.rows),
-        //     cv::Point2f(0, sample_image.rows)
-        // };
-
-        // cv::Mat H = cv_computeHomography(src_points_on_frame, dst_points_for_homography);
-        // if (!H.empty()) {
-        //     cv::Mat warped_sample_image;
-        //     // Warp the sample image onto the homography_display_frame
-        //     cv::warpPerspective(sample_image, warped_sample_image, H, homography_display_frame.size());
-
-        //     // Blend the warped image with the original frame
-        //     // For blending, convert original frame to float, add, convert back
-        //     cv::Mat gray_warped;
-        //     cv::cvtColor(warped_sample_image, gray_warped, cv::COLOR_BGR2GRAY);
-        //     cv::Mat mask = (gray_warped > 0); // Create mask of non-black pixels from warped image
-
-        //     homography_display_frame.setTo(cv::Scalar(0,0,0), mask); // Black out the area where warped image will be
-        //     cv::add(homography_display_frame, warped_sample_image, homography_display_frame);
-        // }
-        // cv::imshow("Homography Demo (Warped Object)", homography_display_frame);
+        cv::imshow("AR Tag Detection (Custom Pipeline)", display);
 
         if (cv::waitKey(1) == 'q')
-        { // Wait for 1ms and check for 'q' key press
+        {
             break;
         }
     }
 
     cap.release();
     cv::destroyAllWindows();
-    std::cout << "Program finished." << std::endl;
-    std::flush(std::cout); // Explicitly flush output
-
     return 0;
 }
