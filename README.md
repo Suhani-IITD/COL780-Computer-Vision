@@ -1,49 +1,66 @@
-# COL780-Computer-Vision
+# COL780 Computer Vision - AR Tag Assignment
 
-Sources: https://drive.google.com/drive/folders/1HDRoBewJfYyAX2xlf77KgNo26_CotpuB
+Source bundle: https://drive.google.com/drive/folders/1HDRoBewJfYyAX2xlf77KgNo26_CotpuB
 
-## Build
+## Solution Overview
+This implementation solves the AR assignment using a custom image-processing pipeline, with OpenCV used only for I/O, display, and matrix utilities.
+
+Implemented pipeline:
+- Frame preprocessing: custom grayscale, Gaussian blur, Sobel, threshold.
+- Tag detection: custom contour tracing, polygon simplification, quad filtering, corner ordering.
+- Tag decoding: custom homography + inverse warping to canonical view, orientation marker detection, 4-bit ID extraction.
+- Task 2 AR overlay: template image projected onto detected tag using custom homography/warp.
+- Task 3 AR rendering: pose from homography + intrinsics, centered cube rendering, optional OBJ wireframe rendering, temporal pose smoothing.
+
+Core files:
+- `main.cpp`: runtime pipeline, overlay logic, 3D projection.
+- `task1.cpp`, `image_processing.h`: custom CV/geometry functions.
+- `scripts/calibrate_camera.py`: camera intrinsics generator.
+- `scripts/run_demo.sh`: one-command build and run helper.
+
+## Setup (Linux/WSL)
+1. Verify environment and missing packages:
+```bash
+./scripts/setup_linux_deps.sh
+```
+2. Auto-install missing dependencies (Ubuntu/Debian):
+```bash
+./scripts/setup_linux_deps.sh --install
+```
+3. Build:
 ```bash
 make clean && make
 ```
-
-## Run Detector
-```bash
-# video
-./ar_tag_detector Tag0.mp4
-
-# webcam
-./ar_tag_detector 0
-
-# with template + intrinsics + obj
-./ar_tag_detector Tag0.mp4 iitd_logo_template.jpg camera_intrinsics.yml wolf.obj
-```
-
-You can also use the helper runner:
-```bash
-# defaults: source=Tag0.mp4, intrinsics=camera_intrinsics.yml if it exists
-./scripts/run_demo.sh
-
-# custom source and extras
-./scripts/run_demo.sh multipleTags.mp4 iitd_logo_template.jpg camera_intrinsics.yml wolf.obj
-```
-
-If you need to pass intrinsics/obj without template, the app supports `-` placeholder:
-```bash
-./ar_tag_detector Tag0.mp4 - camera_intrinsics.yml wolf.obj
-```
-
-## Camera Calibration Helper
-Generate `camera_intrinsics.yml` with a chessboard:
+4. (Optional) Generate calibration file:
 ```bash
 python3 scripts/calibrate_camera.py --source 0 --pattern 9x6 --min-frames 20 --output camera_intrinsics.yml
 ```
 
-Controls while running calibration:
-- `c`: capture current detected chessboard
-- `q`: finish and calibrate
-
-If OpenCV Python bindings are missing in WSL:
+## How To Test
+Run provided videos:
 ```bash
-sudo apt-get install -y python3-opencv python3-numpy
+./ar_tag_detector Tag0.mp4
+./ar_tag_detector multipleTags.mp4
 ```
+
+Run with template + calibrated intrinsics + OBJ:
+```bash
+./ar_tag_detector Tag0.mp4 iitd_logo_template.jpg camera_intrinsics.yml wolf.obj
+```
+
+Use helper runner:
+```bash
+./scripts/run_demo.sh
+./scripts/run_demo.sh multipleTags.mp4 iitd_logo_template.jpg camera_intrinsics.yml wolf.obj
+```
+
+Webcam test:
+```bash
+./ar_tag_detector 0
+```
+
+Expected checks:
+- Tag boundary and corner markers are stable.
+- Displayed ID/orientation is consistent as tag rotates.
+- Template is correctly aligned with tag orientation.
+- 3D cube/OBJ remains anchored with minimal flicker.
