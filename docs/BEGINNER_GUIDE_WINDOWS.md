@@ -18,6 +18,9 @@ flowchart LR
   G2 --> H
 ```
 
+Rendered image:
+![Pipeline Diagram](diagrams/pipeline.svg)
+
 ## 2) Code Map (Where to Read First)
 
 ```mermaid
@@ -28,6 +31,9 @@ flowchart TD
   M --> S2[scripts/build_windows.ps1]
   M --> S3[scripts/setup_windows_deps.ps1]
 ```
+
+Rendered image:
+![Code Map Diagram](diagrams/code_map.svg)
 
 - `main.cpp`: program flow and runtime loop.
 - `task1.cpp`: custom computer-vision functions (core logic).
@@ -64,6 +70,9 @@ flowchart LR
   D --> E[Read center 2x2 bits]
   E --> F[Convert bits to 4-bit ID]
 ```
+
+Rendered image:
+![Tag Decode Diagram](diagrams/tag_decode.svg)
 
 Key idea:
 - Orientation marker tells how the tag is rotated.
