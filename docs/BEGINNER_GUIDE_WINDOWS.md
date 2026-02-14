@@ -114,6 +114,20 @@ Optional full example (only if you downloaded these files):
 .\scripts\test_windows.ps1 -Source Tag0.mp4 -Template iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj wolf.obj
 ```
 
+Ready-to-use local placeholders in this repo:
+- `assets/iitd_logo_template.jpg`
+- `assets/wolf.obj`
+
+Run with placeholders:
+```powershell
+.\scripts\test_windows.ps1 -Source Tag0.mp4 -Template assets\iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj assets\wolf.obj
+```
+
+Regenerate placeholders anytime:
+```bash
+python3 scripts/prepare_demo_assets.py
+```
+
 ## 7) How to Learn from This Code
 - Start by printing one debug message per stage in `main.cpp`.
 - Temporarily disable Task 2/Task 3 and verify only detection+ID first.

@@ -19,6 +19,7 @@ Core files:
 - `task1.cpp`, `image_processing.h`: custom CV/geometry functions.
 - `scripts/calibrate_camera.py`: camera intrinsics generator.
 - `scripts/run_demo.sh`: one-command build and run helper.
+- `scripts/prepare_demo_assets.py`: generates local placeholder template/OBJ assets.
 
 ## Setup (Linux/WSL)
 1. Verify environment and missing packages:
@@ -92,6 +93,20 @@ Windows test equivalents:
 Optional full test (only if these files exist locally):
 ```powershell
 .\scripts\test_windows.ps1 -Source Tag0.mp4 -Template iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj wolf.obj
+```
+
+Built-in placeholder assets (already generated in this repo):
+- `assets/iitd_logo_template.jpg`
+- `assets/wolf.obj`
+
+Run with placeholders:
+```powershell
+.\scripts\test_windows.ps1 -Source Tag0.mp4 -Template assets\iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj assets\wolf.obj
+```
+
+To regenerate placeholders:
+```bash
+python3 scripts/prepare_demo_assets.py
 ```
 
 Expected checks:
