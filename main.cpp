@@ -8,6 +8,7 @@
 #include <array>
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <unordered_map>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/utils/filesystem.hpp>
@@ -434,6 +435,69 @@ static std::string orientation_label(int clockwise_rotations_to_canonical)
     return "ROT-270";
 }
 
+static bool extract_quad_from_contour_extrema(const std::vector<cv::Point> &contour,
+                                              std::vector<cv::Point> &quad)
+{
+    quad.clear();
+    if (contour.size() < 4)
+    {
+        return false;
+    }
+
+    int idx_tl = 0, idx_tr = 0, idx_br = 0, idx_bl = 0;
+    int min_sum = std::numeric_limits<int>::max();
+    int max_sum = std::numeric_limits<int>::min();
+    int min_diff = std::numeric_limits<int>::max();
+    int max_diff = std::numeric_limits<int>::min();
+
+    for (int i = 0; i < static_cast<int>(contour.size()); ++i)
+    {
+        const int x = contour[i].x;
+        const int y = contour[i].y;
+        const int sum = x + y;
+        const int diff = x - y;
+
+        if (sum < min_sum)
+        {
+            min_sum = sum;
+            idx_tl = i;
+        }
+        if (sum > max_sum)
+        {
+            max_sum = sum;
+            idx_br = i;
+        }
+        if (diff > max_diff)
+        {
+            max_diff = diff;
+            idx_tr = i;
+        }
+        if (diff < min_diff)
+        {
+            min_diff = diff;
+            idx_bl = i;
+        }
+    }
+
+    quad = {contour[idx_tl], contour[idx_tr], contour[idx_br], contour[idx_bl]};
+
+    // Reject degenerate quads with repeated corners.
+    for (size_t i = 0; i < quad.size(); ++i)
+    {
+        for (size_t j = i + 1; j < quad.size(); ++j)
+        {
+            if (cv::norm(quad[i] - quad[j]) < 3.0)
+            {
+                quad.clear();
+                return false;
+            }
+        }
+    }
+
+    custom_sort_corners(quad);
+    return is_convex_polygon(quad);
+}
+
 static void overlay_template_on_frame(const cv::Mat &template_img,
                                       const std::vector<cv::Point> &quad_corners,
                                       cv::Mat &display)
@@ -586,8 +650,10 @@ int main(int argc, char **argv)
 
     const int blur_kernel_size = 5;
     const double blur_sigma = 1.4;
-    const uchar threshold_val = 50;
-    const int min_quad_area = 500;
+    const uchar threshold_val = 45;
+    const int min_quad_area = 220;
+    const int min_contour_points = 20;
+    const double max_quad_edge_ratio = 4.2;
     const cv::Size canonical_tag_size(200, 200);
     std::unordered_map<int, PoseSmoother> pose_smoothers_by_id;
     const bool enable_task2_overlay = (run_mode == RunMode::All || run_mode == RunMode::Task2);
@@ -635,7 +701,7 @@ int main(int argc, char **argv)
         bool warped_shown = false;
         int quad_counter = 0;
         std::vector<cv::Point2f> accepted_tag_centers;
-        const std::array<double, 8> epsilon_factors = {0.010, 0.015, 0.020, 0.025, 0.030, 0.040, 0.050, 0.060};
+        const std::array<double, 10> epsilon_factors = {0.006, 0.010, 0.014, 0.018, 0.022, 0.028, 0.035, 0.045, 0.055, 0.070};
 
         std::sort(detected_contours.begin(), detected_contours.end(),
                   [](const std::vector<cv::Point> &a, const std::vector<cv::Point> &b)
@@ -643,7 +709,7 @@ int main(int argc, char **argv)
 
         for (const auto &raw_contour : detected_contours)
         {
-            if (raw_contour.size() < 30)
+            if (raw_contour.size() < static_cast<size_t>(min_contour_points))
             {
                 continue;
             }
@@ -699,6 +765,17 @@ int main(int argc, char **argv)
 
             if (!quad_found)
             {
+                std::vector<cv::Point> extrema_quad;
+                if (extract_quad_from_contour_extrema(raw_contour, extrema_quad) &&
+                    std::abs(contour_area(extrema_quad)) >= min_quad_area)
+                {
+                    approx_curve = extrema_quad;
+                    quad_found = true;
+                }
+            }
+
+            if (!quad_found)
+            {
                 continue;
             }
 
@@ -714,7 +791,7 @@ int main(int argc, char **argv)
                 min_edge = std::min(min_edge, edge_len);
                 max_edge = std::max(max_edge, edge_len);
             }
-            if (min_edge < 8.0 || max_edge / min_edge > 2.8)
+            if (min_edge < 8.0 || max_edge / min_edge > max_quad_edge_ratio)
             {
                 continue;
             }

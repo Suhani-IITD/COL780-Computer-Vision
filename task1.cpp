@@ -856,7 +856,148 @@ cv::Mat rotate_binary_90_cw(const cv::Mat &src)
     return dst;
 }
 
-TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
+static bool find_center_dark_component_bbox(const cv::Mat &img, cv::Rect &bbox)
+{
+    bbox = cv::Rect();
+    if (img.empty() || img.type() != CV_8UC1)
+    {
+        return false;
+    }
+
+    const int rows = img.rows;
+    const int cols = img.cols;
+    const int cx = cols / 2;
+    const int cy = rows / 2;
+
+    auto is_dark = [&](int r, int c) -> bool
+    {
+        return img.at<uchar>(r, c) <= 127;
+    };
+
+    cv::Point seed(-1, -1);
+    if (is_dark(cy, cx))
+    {
+        seed = cv::Point(cx, cy);
+    }
+    else
+    {
+        const int max_radius = std::max(1, std::min(rows, cols) / 3);
+        for (int radius = 1; radius <= max_radius && seed.x < 0; ++radius)
+        {
+            const int x_min = cx - radius;
+            const int x_max = cx + radius;
+            const int y_min = cy - radius;
+            const int y_max = cy + radius;
+
+            for (int x = x_min; x <= x_max && seed.x < 0; ++x)
+            {
+                if (x < 0 || x >= cols)
+                    continue;
+                if (y_min >= 0 && is_dark(y_min, x))
+                    seed = cv::Point(x, y_min);
+                else if (y_max < rows && is_dark(y_max, x))
+                    seed = cv::Point(x, y_max);
+            }
+            for (int y = y_min + 1; y <= y_max - 1 && seed.x < 0; ++y)
+            {
+                if (y < 0 || y >= rows)
+                    continue;
+                if (x_min >= 0 && is_dark(y, x_min))
+                    seed = cv::Point(x_min, y);
+                else if (x_max < cols && is_dark(y, x_max))
+                    seed = cv::Point(x_max, y);
+            }
+        }
+    }
+
+    if (seed.x < 0)
+    {
+        return false;
+    }
+
+    cv::Mat visited = cv::Mat::zeros(rows, cols, CV_8UC1);
+    std::vector<cv::Point> stack;
+    stack.reserve((rows * cols) / 16);
+    stack.push_back(seed);
+    visited.at<uchar>(seed.y, seed.x) = 1;
+
+    int min_x = seed.x;
+    int max_x = seed.x;
+    int min_y = seed.y;
+    int max_y = seed.y;
+    int area = 0;
+
+    const int dr[4] = {-1, 1, 0, 0};
+    const int dc[4] = {0, 0, -1, 1};
+
+    while (!stack.empty())
+    {
+        const cv::Point p = stack.back();
+        stack.pop_back();
+        ++area;
+
+        min_x = std::min(min_x, p.x);
+        max_x = std::max(max_x, p.x);
+        min_y = std::min(min_y, p.y);
+        max_y = std::max(max_y, p.y);
+
+        for (int k = 0; k < 4; ++k)
+        {
+            const int nr = p.y + dr[k];
+            const int nc = p.x + dc[k];
+            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols)
+            {
+                continue;
+            }
+            if (visited.at<uchar>(nr, nc) != 0)
+            {
+                continue;
+            }
+            visited.at<uchar>(nr, nc) = 1;
+            if (is_dark(nr, nc))
+            {
+                stack.push_back(cv::Point(nc, nr));
+            }
+        }
+    }
+
+    const int w = max_x - min_x + 1;
+    const int h = max_y - min_y + 1;
+    if (area < std::max(10, (rows * cols) / 200) ||
+        w < std::max(6, cols / 12) ||
+        h < std::max(6, rows / 12))
+    {
+        return false;
+    }
+
+    const double aspect = static_cast<double>(w) / static_cast<double>(h);
+    if (aspect < 0.5 || aspect > 2.0)
+    {
+        return false;
+    }
+
+    const int pad_x = std::max(2, w / 8);
+    const int pad_y = std::max(2, h / 8);
+    min_x = std::max(0, min_x - pad_x);
+    max_x = std::min(cols - 1, max_x + pad_x);
+    min_y = std::max(0, min_y - pad_y);
+    max_y = std::min(rows - 1, max_y + pad_y);
+
+    int side = std::max(max_x - min_x + 1, max_y - min_y + 1);
+    side = std::min(side, std::min(cols, rows));
+
+    const int center_x = (min_x + max_x) / 2;
+    const int center_y = (min_y + max_y) / 2;
+    int x0 = center_x - side / 2;
+    int y0 = center_y - side / 2;
+    x0 = std::max(0, std::min(x0, cols - side));
+    y0 = std::max(0, std::min(y0, rows - side));
+
+    bbox = cv::Rect(x0, y0, side, side);
+    return bbox.width >= 8 && bbox.height >= 8;
+}
+
+static TagDecodeResult decode_ar_tag_8x8_internal(const cv::Mat &warped_binary, int depth)
 {
     TagDecodeResult result;
     if (warped_binary.empty() || warped_binary.type() != CV_8UC1 || warped_binary.rows != warped_binary.cols)
@@ -882,10 +1023,21 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
         const int y0 = row * cell_h;
         const int x0 = col * cell_w;
 
-        const int y_start = y0 + cell_h / 4;
-        const int y_end = std::min(y0 + (3 * cell_h) / 4, img.rows);
-        const int x_start = x0 + cell_w / 4;
-        const int x_end = std::min(x0 + (3 * cell_w) / 4, img.cols);
+        int y_start = y0 + cell_h / 3;
+        int y_end = std::min(y0 + (2 * cell_h) / 3, img.rows);
+        int x_start = x0 + cell_w / 3;
+        int x_end = std::min(x0 + (2 * cell_w) / 3, img.cols);
+
+        if (y_end <= y_start)
+        {
+            y_start = y0;
+            y_end = std::min(y0 + cell_h, img.rows);
+        }
+        if (x_end <= x_start)
+        {
+            x_start = x0;
+            x_end = std::min(x0 + cell_w, img.cols);
+        }
 
         int white_count = 0;
         int total = 0;
@@ -911,7 +1063,7 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
 
     auto sample_cell_bit = [&](const cv::Mat &img, int row, int col) -> int
     {
-        return sample_cell_white_ratio(img, row, col) >= 0.5 ? 1 : 0;
+        return sample_cell_white_ratio(img, row, col) >= 0.55 ? 1 : 0;
     };
 
     int border_white_cells = 0;
@@ -927,8 +1079,23 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
     }
 
     // Keep this tolerant to blur/perspective leakage while still rejecting white-bordered quads.
-    if (border_white_cells > 6)
+    if (border_white_cells > 10)
     {
+        // If the quad was around the white sheet instead of the inner black tag,
+        // crop the dark connected component near the center and retry once.
+        if (depth < 1)
+        {
+            cv::Rect dark_bbox;
+            if (find_center_dark_component_bbox(warped_binary, dark_bbox))
+            {
+                cv::Mat cropped = warped_binary(dark_bbox).clone();
+                TagDecodeResult retry = decode_ar_tag_8x8_internal(cropped, depth + 1);
+                if (retry.valid)
+                {
+                    return retry;
+                }
+            }
+        }
         return result;
     }
 
@@ -1006,4 +1173,9 @@ TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
     result.id = (b0 << 3) | (b1 << 2) | (b2 << 1) | b3;
     result.clockwise_rotations_to_canonical = rotations;
     return result;
+}
+
+TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
+{
+    return decode_ar_tag_8x8_internal(warped_binary, 0);
 }
