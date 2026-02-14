@@ -90,6 +90,36 @@ Windows test equivalents:
 .\scripts\test_windows.ps1 -Source multipleTags.mp4 -Mode task1
 ```
 
+### Windows Pre-Ship Checklist (Task 1)
+Run these from PowerShell at repo root:
+
+```powershell
+.\scripts\setup_windows_deps.ps1
+.\scripts\build_windows.ps1
+.\scripts\test_windows.ps1 -Source Tag0.mp4 -Mode task1
+.\scripts\test_windows.ps1 -Source multipleTags.mp4 -Mode task1
+```
+
+One-command equivalent:
+```powershell
+.\scripts\pre_ship_windows.ps1
+```
+
+One-command with dependency install + debug frame export:
+```powershell
+.\scripts\pre_ship_windows.ps1 -InstallDeps -GenerateDebug
+```
+
+Acceptance criteria before shipping:
+- `Tag0.mp4`: detector should consistently label the single visible tag (brief occasional misses can happen on motion blur).
+- `multipleTags.mp4`: detector should label all 3 tags when all are visible in frame.
+- Labels should show stable `ID` and a valid rotation label (`UP`, `ROT-90`, `ROT-180`, `ROT-270`).
+- Tag quad and corner dots should stay aligned with the printed tag.
+
+Recommended evidence for submission:
+- One screenshot from `Tag0.mp4` with ID + rotation visible.
+- One screenshot from `multipleTags.mp4` where all 3 tags are labeled.
+
 Debug mode (recommended when tags are not visible):
 ```powershell
 .\scripts\test_windows.ps1 -Source Tag0.mp4 -Mode task1 -DebugDir debug_out
@@ -109,6 +139,7 @@ How to use debug outputs:
 - If `binary` is mostly black/noisy white, thresholding is the issue.
 - If `contours` has no clear tag shapes, contour extraction/filtering is failing.
 - If `warped_binary` is unclear, homography/quad corner quality is weak.
+- If `final` misses one of three tags in `multipleTags.mp4`, inspect `warped_tag_*` / `warped_binary_*` for that frame to verify whether decode is failing or the quad is not being proposed.
 
 Optional full test (only if these files exist locally):
 ```powershell

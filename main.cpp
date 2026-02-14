@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <set>
+#include <array>
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
@@ -633,35 +634,70 @@ int main(int argc, char **argv)
         save_debug_image(debug_dir, frame_idx, "contours", contour_debug);
         bool warped_shown = false;
         int quad_counter = 0;
+        std::vector<cv::Point2f> accepted_tag_centers;
+        const std::array<double, 8> epsilon_factors = {0.010, 0.015, 0.020, 0.025, 0.030, 0.040, 0.050, 0.060};
+
+        std::sort(detected_contours.begin(), detected_contours.end(),
+                  [](const std::vector<cv::Point> &a, const std::vector<cv::Point> &b)
+                  { return a.size() > b.size(); });
 
         for (const auto &raw_contour : detected_contours)
         {
-            if (raw_contour.size() < 40)
+            if (raw_contour.size() < 30)
             {
                 continue;
             }
 
             const double perimeter = get_contour_perimeter(raw_contour);
-            double epsilon = 0.02 * perimeter;
+            if (perimeter <= 1.0)
+            {
+                continue;
+            }
 
             std::vector<cv::Point> approx_curve;
-            rdp_simplify(raw_contour, approx_curve, epsilon);
-            if (approx_curve.size() > 4)
+            std::vector<cv::Point> closed_contour = raw_contour;
+            closed_contour.push_back(raw_contour.front());
+
+            bool quad_found = false;
+            for (const double eps_factor : epsilon_factors)
             {
-                rdp_simplify(raw_contour, approx_curve, epsilon * 1.5);
+                std::vector<cv::Point> approx_candidate;
+                rdp_simplify(closed_contour, approx_candidate, eps_factor * perimeter);
+
+                if (!approx_candidate.empty() && approx_candidate.front() == approx_candidate.back())
+                {
+                    approx_candidate.pop_back();
+                }
+
+                std::vector<cv::Point> dedup_points;
+                dedup_points.reserve(approx_candidate.size());
+                for (const auto &p : approx_candidate)
+                {
+                    if (dedup_points.empty() || p != dedup_points.back())
+                    {
+                        dedup_points.push_back(p);
+                    }
+                }
+
+                if (dedup_points.size() != 4)
+                {
+                    continue;
+                }
+                if (!is_convex_polygon(dedup_points))
+                {
+                    continue;
+                }
+                if (std::abs(contour_area(dedup_points)) < min_quad_area)
+                {
+                    continue;
+                }
+
+                approx_curve = dedup_points;
+                quad_found = true;
+                break;
             }
 
-            if (approx_curve.size() != 4)
-            {
-                continue;
-            }
-
-            if (!is_convex_polygon(approx_curve))
-            {
-                continue;
-            }
-
-            if (std::abs(contour_area(approx_curve)) < min_quad_area)
+            if (!quad_found)
             {
                 continue;
             }
@@ -678,7 +714,7 @@ int main(int argc, char **argv)
                 min_edge = std::min(min_edge, edge_len);
                 max_edge = std::max(max_edge, edge_len);
             }
-            if (min_edge < 1.0 || max_edge / min_edge > 2.5)
+            if (min_edge < 8.0 || max_edge / min_edge > 2.8)
             {
                 continue;
             }
@@ -716,6 +752,33 @@ int main(int argc, char **argv)
             save_debug_image(debug_dir, frame_idx, "warped_binary_" + std::to_string(quad_counter), warped_binary);
 
             TagDecodeResult tag = decode_ar_tag_8x8(warped_binary);
+            if (!tag.valid)
+            {
+                continue;
+            }
+
+            cv::Point2f quad_center(0.0f, 0.0f);
+            for (const auto &p : approx_curve)
+            {
+                quad_center += cv::Point2f(static_cast<float>(p.x), static_cast<float>(p.y));
+            }
+            quad_center *= 0.25f;
+
+            bool is_duplicate = false;
+            for (const auto &existing_center : accepted_tag_centers)
+            {
+                if (cv::norm(quad_center - existing_center) < 35.0f)
+                {
+                    is_duplicate = true;
+                    break;
+                }
+            }
+            if (is_duplicate)
+            {
+                continue;
+            }
+            accepted_tag_centers.push_back(quad_center);
+
             if (enable_task2_overlay && tag.valid && !template_img.empty())
             {
                 overlay_template_on_frame(template_img, approx_curve, display);
@@ -746,12 +809,11 @@ int main(int argc, char **argv)
                 }
             }
 
-            const cv::Scalar quad_color = tag.valid ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 165, 255);
+            const cv::Scalar quad_color = cv::Scalar(0, 255, 0);
             cv::polylines(display, std::vector<std::vector<cv::Point>>(1, approx_curve), true, quad_color, 2);
 
-            std::string label = tag.valid ? ("ID: " + std::to_string(tag.id) + " " +
-                                             orientation_label(tag.clockwise_rotations_to_canonical))
-                                          : "ID: ?";
+            std::string label = "ID: " + std::to_string(tag.id) + " " +
+                                orientation_label(tag.clockwise_rotations_to_canonical);
             cv::putText(display, label, approx_curve[0], cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 0), 2);
 
             for (const auto &p : approx_curve)
