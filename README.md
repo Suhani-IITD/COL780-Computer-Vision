@@ -86,8 +86,8 @@ Webcam test:
 
 Windows test equivalents:
 ```powershell
-.\scripts\test_windows.ps1
-.\scripts\test_windows.ps1 -Source multipleTags.mp4
+.\scripts\test_windows.ps1                      # default mode=task1 (tags + IDs only)
+.\scripts\test_windows.ps1 -Source multipleTags.mp4 -Mode task1
 ```
 
 Optional full test (only if these files exist locally):
@@ -101,7 +101,7 @@ Built-in placeholder assets (already generated in this repo):
 
 Run with placeholders:
 ```powershell
-.\scripts\test_windows.ps1 -Source Tag0.mp4 -Template assets\iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj assets\wolf.obj
+.\scripts\test_windows.ps1 -Source Tag0.mp4 -Template assets\iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj assets\wolf.obj -Mode all
 ```
 
 To regenerate placeholders:
