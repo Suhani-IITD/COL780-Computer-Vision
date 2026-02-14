@@ -2,6 +2,8 @@
 
 Source bundle: https://drive.google.com/drive/folders/1HDRoBewJfYyAX2xlf77KgNo26_CotpuB
 
+Beginner-friendly code walkthrough (Windows): `docs/BEGINNER_GUIDE_WINDOWS.md`
+
 ## Solution Overview
 This implementation solves the AR assignment using a custom image-processing pipeline, with OpenCV used only for I/O, display, and matrix utilities.
 
