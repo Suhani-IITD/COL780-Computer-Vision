@@ -1,0 +1,6 @@
+flowchart LR
+  A[Warped Tag 8x8] --> B[Check black border]
+  B --> C[Find white orientation marker in inner 4x4]
+  C --> D[Rotate to canonical orientation]
+  D --> E[Read center 2x2 bits]
+  E --> F[Convert bits to 4-bit ID]

@@ -3,6 +3,8 @@
 #include <cmath>
 #include <numeric>
 #include <algorithm>
+#include <array>
+#include <stdexcept>
 
 // Custom RGB to grayscale conversion
 cv::Mat rgbToGray(const cv::Mat &src)
@@ -538,7 +540,7 @@ void rdp_simplify(const std::vector<cv::Point> &points, std::vector<cv::Point> &
     }
 }
 
-void custome_sort_corners(std::vector<cv::Point> &corners)
+void custom_sort_corners(std::vector<cv::Point> &corners)
 {
     if (corners.size() != 4)
         return;
@@ -565,6 +567,63 @@ void custome_sort_corners(std::vector<cv::Point> &corners)
     sorted[3] = corners[std::distance(diffs.begin(), std::max_element(diffs.begin(), diffs.end()))];
 
     corners = sorted;
+}
+
+double contour_area(const std::vector<cv::Point> &polygon)
+{
+    if (polygon.size() < 3)
+    {
+        return 0.0;
+    }
+
+    double area = 0.0;
+    for (size_t i = 0; i < polygon.size(); ++i)
+    {
+        const cv::Point &p1 = polygon[i];
+        const cv::Point &p2 = polygon[(i + 1) % polygon.size()];
+        area += static_cast<double>(p1.x) * p2.y - static_cast<double>(p2.x) * p1.y;
+    }
+
+    return 0.5 * area;
+}
+
+bool is_convex_polygon(const std::vector<cv::Point> &polygon)
+{
+    if (polygon.size() < 4)
+    {
+        return false;
+    }
+
+    int sign = 0;
+    for (size_t i = 0; i < polygon.size(); ++i)
+    {
+        const cv::Point &a = polygon[i];
+        const cv::Point &b = polygon[(i + 1) % polygon.size()];
+        const cv::Point &c = polygon[(i + 2) % polygon.size()];
+
+        const int abx = b.x - a.x;
+        const int aby = b.y - a.y;
+        const int bcx = c.x - b.x;
+        const int bcy = c.y - b.y;
+        const int cross = abx * bcy - aby * bcx;
+
+        if (cross == 0)
+        {
+            continue;
+        }
+
+        const int current_sign = (cross > 0) ? 1 : -1;
+        if (sign == 0)
+        {
+            sign = current_sign;
+        }
+        else if (sign != current_sign)
+        {
+            return false;
+        }
+    }
+
+    return sign != 0;
 }
 
 void draw_contours_custom(cv::Mat &image,
@@ -675,10 +734,7 @@ cv::Mat custom_compute_homography(const std::vector<cv::Point2f> &src_points, co
     cv::SVD::compute(A, w, u, vt, cv::SVD::FULL_UV);
 
     // The solution 'h' is the last row of Vt (corresponding to the smallest singular value)
-    std::cout << "Vt Matrix shape: " << vt.rows << "x" << vt.cols << std::endl; // Debug: Print Vt shape
     cv::Mat H = vt.row(vt.rows - 1).reshape(0, 3);
-    std::cout << "Unnormalized Homography Matrix: " << std::endl
-              << H << std::endl; // Debug: Print unnormalized H
 
     // 3. Normalize: Make H[2][2] = 1 (if possible)
     if (H.at<double>(2, 2) != 0)
@@ -741,4 +797,139 @@ void custom_warp_perspective(const cv::Mat &src, cv::Mat &dst, const cv::Mat &H,
             }
         }
     }
+}
+
+cv::Mat rotate_binary_90_cw(const cv::Mat &src)
+{
+    if (src.empty() || src.type() != CV_8UC1)
+    {
+        CV_Error(cv::Error::StsBadArg, "rotate_binary_90_cw expects non-empty CV_8UC1 image.");
+    }
+
+    cv::Mat dst(src.cols, src.rows, CV_8UC1, cv::Scalar(0));
+    for (int r = 0; r < src.rows; ++r)
+    {
+        for (int c = 0; c < src.cols; ++c)
+        {
+            dst.at<uchar>(c, src.rows - 1 - r) = src.at<uchar>(r, c);
+        }
+    }
+    return dst;
+}
+
+TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
+{
+    TagDecodeResult result;
+    if (warped_binary.empty() || warped_binary.type() != CV_8UC1 || warped_binary.rows != warped_binary.cols)
+    {
+        return result;
+    }
+
+    const int grid_size = 8;
+    if (warped_binary.rows < grid_size)
+    {
+        return result;
+    }
+
+    auto sample_cell = [&](const cv::Mat &img, int row, int col) -> int
+    {
+        const int cell_h = img.rows / grid_size;
+        const int cell_w = img.cols / grid_size;
+        if (cell_h == 0 || cell_w == 0)
+        {
+            return 0;
+        }
+
+        const int y0 = row * cell_h;
+        const int x0 = col * cell_w;
+
+        const int y_start = y0 + cell_h / 4;
+        const int y_end = std::min(y0 + (3 * cell_h) / 4, img.rows);
+        const int x_start = x0 + cell_w / 4;
+        const int x_end = std::min(x0 + (3 * cell_w) / 4, img.cols);
+
+        int white_count = 0;
+        int total = 0;
+        for (int y = y_start; y < y_end; ++y)
+        {
+            for (int x = x_start; x < x_end; ++x)
+            {
+                ++total;
+                if (img.at<uchar>(y, x) > 127)
+                {
+                    ++white_count;
+                }
+            }
+        }
+
+        if (total == 0)
+        {
+            return 0;
+        }
+
+        return (white_count * 2 >= total) ? 1 : 0;
+    };
+
+    int border_white_cells = 0;
+    for (int r = 0; r < grid_size; ++r)
+    {
+        for (int c = 0; c < grid_size; ++c)
+        {
+            if (r == 0 || c == 0 || r == grid_size - 1 || c == grid_size - 1)
+            {
+                border_white_cells += sample_cell(warped_binary, r, c);
+            }
+        }
+    }
+
+    if (border_white_cells > 2)
+    {
+        return result;
+    }
+
+    const std::array<std::pair<int, int>, 4> marker_cells = {
+        std::make_pair(2, 2), // TL marker candidate
+        std::make_pair(2, 5), // TR marker candidate
+        std::make_pair(5, 5), // BR marker candidate (canonical)
+        std::make_pair(5, 2)  // BL marker candidate
+    };
+
+    int marker_bits[4] = {0, 0, 0, 0};
+    int marker_sum = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        marker_bits[i] = sample_cell(warped_binary, marker_cells[i].first, marker_cells[i].second);
+        marker_sum += marker_bits[i];
+    }
+
+    if (marker_sum != 1)
+    {
+        return result;
+    }
+
+    int rotations = 0;
+    if (marker_bits[2] == 1)
+        rotations = 0; // already BR
+    else if (marker_bits[1] == 1)
+        rotations = 1; // TR -> BR
+    else if (marker_bits[0] == 1)
+        rotations = 2; // TL -> BR
+    else
+        rotations = 3; // BL -> BR
+
+    cv::Mat canonical = warped_binary;
+    for (int i = 0; i < rotations; ++i)
+    {
+        canonical = rotate_binary_90_cw(canonical);
+    }
+
+    const int b0 = sample_cell(canonical, 3, 3);
+    const int b1 = sample_cell(canonical, 3, 4);
+    const int b2 = sample_cell(canonical, 4, 4);
+    const int b3 = sample_cell(canonical, 4, 3);
+
+    result.valid = true;
+    result.id = (b0 << 3) | (b1 << 2) | (b2 << 1) | b3;
+    result.clockwise_rotations_to_canonical = rotations;
+    return result;
 }

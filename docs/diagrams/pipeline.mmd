@@ -1,0 +1,10 @@
+flowchart LR
+  A[Input Frame] --> B[Preprocess: Gray + Blur + Sobel + Threshold]
+  B --> C[Custom Contour Detection]
+  C --> D[Find 4-corner Quads]
+  D --> E[Homography + Warp to Canonical Tag]
+  E --> F[Decode Orientation + 4-bit ID]
+  F --> G1[Task 2: Overlay Template]
+  F --> G2[Task 3: Pose + Cube/OBJ]
+  G1 --> H[Display Output]
+  G2 --> H
