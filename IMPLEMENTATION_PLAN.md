@@ -1,40 +1,45 @@
-# AR Assignment Implementation Plan
+# AR Assignment Implementation Plan (Status)
 
 ## Goal
 Complete HW1 AR tasks using custom image-processing and geometry code (OpenCV only for I/O, display, and basic utilities).
 
 ## Phase 1: Build Stabilization and Constraint Enforcement
-1. Remove missing `test_functions` dependencies from `main.cpp` and `Makefile`.
-2. Keep a single custom pipeline in runtime flow.
-3. Replace OpenCV contour filters (`isContourConvex`, `contourArea`, OpenCV contour drawing calls) with custom equivalents where needed.
-4. Ensure project compiles cleanly with current source set.
+Status: Completed
+1. Removed missing `test_functions` dependencies from `main.cpp` and `Makefile`.
+2. Kept a single custom pipeline in runtime flow.
+3. Replaced OpenCV contour filters with custom geometry checks used in runtime.
+4. Verified clean build with current source set.
 
 ## Phase 2: Task 1 (Detection + ID)
-1. Robust candidate extraction:
-   - grayscale -> blur -> Sobel/edge -> threshold -> custom contour extraction.
+Status: Completed
+1. Implemented custom candidate extraction:
+   - grayscale -> blur -> Sobel -> threshold -> custom contour extraction.
    - contour simplification + quadrilateral filtering + corner ordering.
-2. Tag normalization:
+2. Implemented custom tag normalization:
    - custom homography to canonical square.
-   - custom warp to orthographic top view.
-3. Tag decoding:
-   - detect orientation marker.
-   - rotate to canonical orientation.
-   - decode 4-bit ID from inner grid.
-4. Draw result overlays (corners + decoded ID on frame).
+   - custom inverse warp to orthographic view.
+3. Implemented tag decoding:
+   - orientation marker detection.
+   - canonical rotation.
+   - 4-bit ID decode from central 2x2.
+4. Added overlays for corners, ID, and orientation label.
 
 ## Phase 3: Task 2 (2D Augmented Reality)
+Status: Completed (manual validation pending)
 1. Load template image once.
 2. Compute template-to-tag homography for each detected tag.
-3. Warp template onto frame with masking and proper orientation.
-4. Validate multi-tag and varying-angle behavior.
+3. Warp template onto frame with custom inverse mapping and mask compositing.
+4. Manual validation remains for webcam and stress cases.
 
 ## Phase 4: Task 3 (3D Augmented Reality)
-1. Add camera calibration workflow and store intrinsic matrix.
-2. Estimate pose from homography and intrinsics (R, t).
-3. Project 3D cube onto tag.
-4. Optional bonus: OBJ rendering pipeline and temporal smoothing.
+Status: Implemented (calibrated-intrinsics file still required for best results)
+1. Added intrinsics loading from YAML (`K` or `camera_matrix`) with default fallback.
+2. Implemented pose estimation from homography and intrinsics (R, t).
+3. Implemented centered 3D cube projection on tag.
+4. Added optional OBJ wireframe rendering and temporal pose smoothing (EMA).
 
 ## Phase 5: Validation and Deliverables
-1. Run on all provided videos and collect outputs for each task.
-2. Document assumptions, parameter settings, and failure cases.
-3. Prepare concise demo/report checklist aligned with rubric.
+Status: In progress
+1. Build + non-GUI smoke runs completed on provided videos in WSL.
+2. Remaining: full GUI/manual validation on webcam and report capture for rubric evidence.
+3. Remaining: calibrated intrinsics capture (`camera_intrinsics.yml`) for best Task 3 alignment.
