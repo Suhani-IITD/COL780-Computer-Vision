@@ -3,8 +3,6 @@
 #include <cmath>
 #include <numeric>
 #include <algorithm>
-#include <array>
-#include <stdexcept>
 
 // Custom RGB to grayscale conversion
 cv::Mat rgbToGray(const cv::Mat &src)
@@ -253,8 +251,10 @@ bool is_pixel_white(const cv::Mat &img, int r, int c)
     return img.at<uchar>(r, c) == 255;
 }
 
-std::vector<std::vector<cv::Point>> detect_contours(const cv::Mat& binary_img) {
-    if (binary_img.empty() || binary_img.type() != CV_8UC1) {
+std::vector<std::vector<cv::Point>> detect_contours(const cv::Mat &binary_img)
+{
+    if (binary_img.empty() || binary_img.type() != CV_8UC1)
+    {
         throw std::runtime_error("Input must be 8-bit single-channel binary image.");
     }
 
@@ -266,33 +266,40 @@ std::vector<std::vector<cv::Point>> detect_contours(const cv::Mat& binary_img) {
     int dc[] = {0, 1, 1, 1, 0, -1, -1, -1};
 
     // Scan image for starting points
-    for (int r = 0; r < binary_img.rows; ++r) {
-        const uchar* row_ptr = binary_img.ptr<uchar>(r);
-        for (int c = 0; c < binary_img.cols; ++c) {
-            
+    for (int r = 0; r < binary_img.rows; ++r)
+    {
+        const uchar *row_ptr = binary_img.ptr<uchar>(r);
+        for (int c = 0; c < binary_img.cols; ++c)
+        {
+
             // Found unvisited white pixel
-            if (row_ptr[c] == 255 && visited.at<uchar>(r, c) == 0) {
-                
+            if (row_ptr[c] == 255 && visited.at<uchar>(r, c) == 0)
+            {
+
                 std::vector<cv::Point> contour;
                 int start_r = r;
                 int start_c = c;
-                
+
                 // Add starting point
                 contour.push_back(cv::Point(c, r));
                 visited.at<uchar>(r, c) = 255;
 
                 // ✅ FIX: Check if isolated pixel
                 bool has_neighbors = false;
-                for (int k = 0; k < 8; ++k) {
-                    if (is_pixel_white(binary_img, r + dr[k], c + dc[k])) {
+                for (int k = 0; k < 8; ++k)
+                {
+                    if (is_pixel_white(binary_img, r + dr[k], c + dc[k]))
+                    {
                         has_neighbors = true;
                         break;
                     }
                 }
 
-                if (!has_neighbors) {
+                if (!has_neighbors)
+                {
                     // Isolated pixel - contour complete
-                    if (contour.size() > 50) {
+                    if (contour.size() > 50)
+                    {
                         contours.push_back(contour);
                     }
                     continue;
@@ -301,29 +308,33 @@ std::vector<std::vector<cv::Point>> detect_contours(const cv::Mat& binary_img) {
                 // Moore-Neighbor Tracing
                 int curr_r = r;
                 int curr_c = c;
-                int backtrack_idx = 6;  // Entered from West
-                
-                int max_iterations = binary_img.rows * binary_img.cols;  // Safety limit
+                int backtrack_idx = 6; // Entered from West
+
+                int max_iterations = binary_img.rows * binary_img.cols; // Safety limit
                 int iterations = 0;
-                
-                while (iterations++ < max_iterations) {
+
+                while (iterations++ < max_iterations)
+                {
                     int found_neighbor = -1;
-                    
+
                     // Search clockwise from (backtrack + 1)
-                    for (int k = 0; k < 8; ++k) {
+                    for (int k = 0; k < 8; ++k)
+                    {
                         int idx = (backtrack_idx + 1 + k) % 8;
                         int nr = curr_r + dr[idx];
                         int nc = curr_c + dc[idx];
-                        
-                        if (is_pixel_white(binary_img, nr, nc)) {
+
+                        if (is_pixel_white(binary_img, nr, nc))
+                        {
                             found_neighbor = idx;
                             curr_r = nr;
                             curr_c = nc;
                             break;
                         }
                     }
-                    
-                    if (found_neighbor == -1) {
+
+                    if (found_neighbor == -1)
+                    {
                         // Dead end (shouldn't happen for closed contours)
                         break;
                     }
@@ -332,7 +343,8 @@ std::vector<std::vector<cv::Point>> detect_contours(const cv::Mat& binary_img) {
                     backtrack_idx = (found_neighbor + 4) % 8;
 
                     // ✅ FIX: Check stop condition BEFORE adding duplicate start
-                    if (curr_r == start_r && curr_c == start_c) {
+                    if (curr_r == start_r && curr_c == start_c)
+                    {
                         // Completed the loop
                         break;
                     }
@@ -341,86 +353,96 @@ std::vector<std::vector<cv::Point>> detect_contours(const cv::Mat& binary_img) {
                     contour.push_back(cv::Point(curr_c, curr_r));
                     visited.at<uchar>(curr_r, curr_c) = 255;
                 }
-                
+
                 // Filter and store
-                if (contour.size() > 50) {
+                if (contour.size() > 50)
+                {
                     contours.push_back(contour);
                 }
             }
         }
     }
-    
+
     return contours;
 }
 
-std::vector<std::vector<cv::Point>> detect_contours_opencv_style(const cv::Mat& binary_img) {
-    if (binary_img.empty() || binary_img.type() != CV_8UC1) {
+std::vector<std::vector<cv::Point>> detect_contours_opencv_style(const cv::Mat &binary_img)
+{
+    if (binary_img.empty() || binary_img.type() != CV_8UC1)
+    {
         throw std::runtime_error("Input must be 8-bit single-channel binary image.");
     }
 
     std::vector<std::vector<cv::Point>> contours;
-    cv::Mat labeled = cv::Mat::zeros(binary_img.size(), CV_32S);  // -1=traced, 0=bg, >0=contour_id
-    
+    cv::Mat labeled = cv::Mat::zeros(binary_img.size(), CV_32S); // -1=traced, 0=bg, >0=contour_id
+
     int contour_id = 1;
 
     // 8-neighbor offsets
     int dr[] = {-1, -1, 0, 1, 1, 1, 0, -1};
     int dc[] = {0, 1, 1, 1, 0, -1, -1, -1};
 
-    for (int r = 0; r < binary_img.rows; ++r) {
-        for (int c = 0; c < binary_img.cols; ++c) {
-            
+    for (int r = 0; r < binary_img.rows; ++r)
+    {
+        for (int c = 0; c < binary_img.cols; ++c)
+        {
+
             // Check if this is a new contour starting point
-            if (binary_img.at<uchar>(r, c) == 255 && labeled.at<int>(r, c) == 0) {
-                
+            if (binary_img.at<uchar>(r, c) == 255 && labeled.at<int>(r, c) == 0)
+            {
+
                 // Determine if outer or hole boundary
-                bool is_outer = (c == 0 || binary_img.at<uchar>(r, c-1) == 0);
-                
+                bool is_outer = (c == 0 || binary_img.at<uchar>(r, c - 1) == 0);
+
                 std::vector<cv::Point> contour;
-                
+
                 // Trace boundary
                 int curr_r = r;
                 int curr_c = c;
-                int dir = is_outer ? 7 : 3;  // Starting search direction
-                
-                do {
+                int dir = is_outer ? 7 : 3; // Starting search direction
+
+                do
+                {
                     contour.push_back(cv::Point(curr_c, curr_r));
                     labeled.at<int>(curr_r, curr_c) = contour_id;
-                    
+
                     // Find next boundary pixel
                     bool found = false;
-                    for (int i = 0; i < 8; ++i) {
+                    for (int i = 0; i < 8; ++i)
+                    {
                         int check_dir = (dir + i) % 8;
                         int nr = curr_r + dr[check_dir];
                         int nc = curr_c + dc[check_dir];
-                        
-                        if (nr >= 0 && nr < binary_img.rows && 
+
+                        if (nr >= 0 && nr < binary_img.rows &&
                             nc >= 0 && nc < binary_img.cols &&
-                            binary_img.at<uchar>(nr, nc) == 255) {
-                            
+                            binary_img.at<uchar>(nr, nc) == 255)
+                        {
+
                             curr_r = nr;
                             curr_c = nc;
-                            dir = (check_dir + 5) % 8;  // Update search start direction
+                            dir = (check_dir + 5) % 8; // Update search start direction
                             found = true;
                             break;
                         }
                     }
-                    
-                    if (!found) break;
-                    
+
+                    if (!found)
+                        break;
+
                 } while (curr_r != r || curr_c != c);
-                
-                if (contour.size() > 50) {
+
+                if (contour.size() > 50)
+                {
                     contours.push_back(contour);
                     contour_id++;
                 }
             }
         }
     }
-    
+
     return contours;
 }
-
 
 double get_contour_perimeter(const std::vector<cv::Point> &contour)
 {
@@ -487,6 +509,137 @@ void sort_corners(std::vector<cv::Point> &corners)
     corners.push_back(bot[0]); // BL
 }
 
+// void sort_corners_float(std::vector<cv::Point2f> &corners)
+// {
+//     // Calculate center
+
+//     cv::Point2f center(0, 0);
+//     for (const auto &p : corners)
+//         center += cv::Point2f(p);
+//     center *= (1.0 / corners.size());
+
+//     // Separate into Top and Bottom based on Y
+//     std::vector<cv::Point> top, bot;
+//     for (const auto &p : corners)
+//     {
+//         if (p.y < center.y)
+//             top.push_back(p);
+//         else
+//             bot.push_back(p);
+//     }
+
+//     // Sort Top by X (TL, TR)
+//     // Note: Use a robust sort for production, this is a simple heuristic
+//     if (top[0].x > top[1].x)
+//         std::swap(top[0], top[1]);
+
+//     // Sort Bottom by X (BL, BR) -> We want BR, BL ordering for standard CV homography?
+//     // Actually standard is TL, TR, BR, BL.
+//     if (bot[0].x > bot[1].x)
+//         std::swap(bot[0], bot[1]);
+
+//     corners.clear();
+//     corners.push_back(top[0]); // TL
+//     corners.push_back(top[1]); // TR
+//     corners.push_back(bot[1]); // BR
+//     corners.push_back(bot[0]); // BL
+// }
+
+void sort_corners_float(std::vector<cv::Point2f> &corners)
+{
+    if (corners.size() != 4)
+    {
+        std::cerr << "ERROR: sort_corners_float requires exactly 4 corners, got "
+                  << corners.size() << std::endl;
+        return;
+    }
+
+    // Method 1: Use sum/diff (MOST ROBUST - RECOMMENDED)
+    std::vector<float> sums, diffs;
+    for (const auto &p : corners)
+    {
+        sums.push_back(p.x + p.y);
+        diffs.push_back(p.y - p.x);
+    }
+
+    std::vector<cv::Point2f> sorted(4);
+
+    // Top-Left: Minimum sum (smallest x+y)
+    auto min_sum_it = std::min_element(sums.begin(), sums.end());
+    int tl_idx = std::distance(sums.begin(), min_sum_it);
+    sorted[0] = corners[tl_idx];
+
+    // Top-Right: Minimum diff (y-x is most negative)
+    auto min_diff_it = std::min_element(diffs.begin(), diffs.end());
+    int tr_idx = std::distance(diffs.begin(), min_diff_it);
+    sorted[1] = corners[tr_idx];
+
+    // Bottom-Right: Maximum sum (largest x+y)
+    auto max_sum_it = std::max_element(sums.begin(), sums.end());
+    int br_idx = std::distance(sums.begin(), max_sum_it);
+    sorted[2] = corners[br_idx];
+
+    // Bottom-Left: Maximum diff (y-x is most positive)
+    auto max_diff_it = std::max_element(diffs.begin(), diffs.end());
+    int bl_idx = std::distance(diffs.begin(), max_diff_it);
+    sorted[3] = corners[bl_idx];
+
+    // Verification: Check if all indices are unique
+    std::set<int> unique_indices = {tl_idx, tr_idx, br_idx, bl_idx};
+
+    if (unique_indices.size() != 4)
+    {
+        // Duplicate indices detected - use angle-based fallback with CUSTOM COMPARATOR
+        std::cerr << "WARNING: Duplicate corner indices, using angle-based sorting" << std::endl;
+
+        // Calculate center
+        cv::Point2f center(0, 0);
+        for (const auto &p : corners)
+        {
+            center += p;
+        }
+        center.x /= 4.0f;
+        center.y /= 4.0f;
+
+        // Create pairs of (angle, point)
+        std::vector<std::pair<double, cv::Point2f>> angle_points;
+        for (const auto &p : corners)
+        {
+            double angle = std::atan2(p.y - center.y, p.x - center.x);
+            angle_points.push_back({angle, p});
+        }
+
+        // Sort by angle only (using custom comparator)
+        std::sort(angle_points.begin(), angle_points.end(),
+                  [](const std::pair<double, cv::Point2f> &a,
+                     const std::pair<double, cv::Point2f> &b)
+                  {
+                      return a.first < b.first; // Compare angles only
+                  });
+
+        // Find TL position (minimum x+y among sorted)
+        int tl_pos = 0;
+        float min_sum_val = angle_points[0].second.x + angle_points[0].second.y;
+        for (size_t i = 1; i < angle_points.size(); i++)
+        {
+            float sum_val = angle_points[i].second.x + angle_points[i].second.y;
+            if (sum_val < min_sum_val)
+            {
+                min_sum_val = sum_val;
+                tl_pos = i;
+            }
+        }
+
+        // Rotate to start from TL
+        for (size_t i = 0; i < 4; i++)
+        {
+            sorted[i] = angle_points[(tl_pos + i) % 4].second;
+        }
+    }
+
+    corners = sorted;
+}
+
 // Ramer-Douglas-Peucker Algorithm
 void rdp_simplify(const std::vector<cv::Point> &points, std::vector<cv::Point> &out_points, double epsilon)
 {
@@ -540,7 +693,7 @@ void rdp_simplify(const std::vector<cv::Point> &points, std::vector<cv::Point> &
     }
 }
 
-void custom_sort_corners(std::vector<cv::Point> &corners)
+void custome_sort_corners(std::vector<cv::Point> &corners)
 {
     if (corners.size() != 4)
         return;
@@ -567,63 +720,6 @@ void custom_sort_corners(std::vector<cv::Point> &corners)
     sorted[3] = corners[std::distance(diffs.begin(), std::max_element(diffs.begin(), diffs.end()))];
 
     corners = sorted;
-}
-
-double contour_area(const std::vector<cv::Point> &polygon)
-{
-    if (polygon.size() < 3)
-    {
-        return 0.0;
-    }
-
-    double area = 0.0;
-    for (size_t i = 0; i < polygon.size(); ++i)
-    {
-        const cv::Point &p1 = polygon[i];
-        const cv::Point &p2 = polygon[(i + 1) % polygon.size()];
-        area += static_cast<double>(p1.x) * p2.y - static_cast<double>(p2.x) * p1.y;
-    }
-
-    return 0.5 * area;
-}
-
-bool is_convex_polygon(const std::vector<cv::Point> &polygon)
-{
-    if (polygon.size() < 4)
-    {
-        return false;
-    }
-
-    int sign = 0;
-    for (size_t i = 0; i < polygon.size(); ++i)
-    {
-        const cv::Point &a = polygon[i];
-        const cv::Point &b = polygon[(i + 1) % polygon.size()];
-        const cv::Point &c = polygon[(i + 2) % polygon.size()];
-
-        const int abx = b.x - a.x;
-        const int aby = b.y - a.y;
-        const int bcx = c.x - b.x;
-        const int bcy = c.y - b.y;
-        const int cross = abx * bcy - aby * bcx;
-
-        if (cross == 0)
-        {
-            continue;
-        }
-
-        const int current_sign = (cross > 0) ? 1 : -1;
-        if (sign == 0)
-        {
-            sign = current_sign;
-        }
-        else if (sign != current_sign)
-        {
-            return false;
-        }
-    }
-
-    return sign != 0;
 }
 
 void draw_contours_custom(cv::Mat &image,
@@ -733,7 +829,6 @@ cv::Mat custom_compute_homography(const std::vector<cv::Point2f> &src_points, co
     // A = U * W * Vt
     cv::SVD::compute(A, w, u, vt, cv::SVD::FULL_UV);
 
-    // The solution 'h' is the last row of Vt (corresponding to the smallest singular value)
     cv::Mat H = vt.row(vt.rows - 1).reshape(0, 3);
 
     // 3. Normalize: Make H[2][2] = 1 (if possible)
@@ -742,16 +837,41 @@ cv::Mat custom_compute_homography(const std::vector<cv::Point2f> &src_points, co
         H = H / H.at<double>(2, 2);
     }
 
+    std::cout << "Homography Matrix returned" << std::endl;
+    std::flush(std::cout);
+
     return H;
 }
 
 void custom_warp_perspective(const cv::Mat &src, cv::Mat &dst, const cv::Mat &H, cv::Size size)
 {
+
+    // Validate inputs
+    if (src.empty())
+    {
+        std::cerr << "ERROR: Source image is empty!" << std::endl;
+        dst = cv::Mat();
+        return;
+    }
+
+    if (H.empty() || H.rows != 3 || H.cols != 3)
+    {
+        std::cerr << "ERROR: Invalid homography matrix!" << std::endl;
+        dst = cv::Mat();
+        return;
+    }
+
     // 1. Initialize destination image
     dst = cv::Mat::zeros(size, src.type());
 
     // 2. Compute Inverse Homography (We map Dst -> Src)
     cv::Mat H_inv = H.inv();
+
+    if (H_inv.empty())
+    {
+        std::cerr << "Warning: Singular Homography Matrix. Skipping warp." << std::endl;
+        return;
+    }
 
     // 3. Iterate over every pixel in the DESTINATION image
     for (int v = 0; v < size.height; v++)
@@ -799,137 +919,172 @@ void custom_warp_perspective(const cv::Mat &src, cv::Mat &dst, const cv::Mat &H,
     }
 }
 
-cv::Mat rotate_binary_90_cw(const cv::Mat &src)
+TagInfo decode_ar_tag(const cv::Mat &frame, const std::vector<cv::Point> &corners)
 {
-    if (src.empty() || src.type() != CV_8UC1)
+    TagInfo tag;
+    tag.id = -1; // Invalid by default
+    tag.corners.resize(4);
+
+    // 1. Convert corners to float and sort
+    std::vector<cv::Point2f> sorted_corners;
+    for (const auto &p : corners)
     {
-        CV_Error(cv::Error::StsBadArg, "rotate_binary_90_cw expects non-empty CV_8UC1 image.");
+        sorted_corners.push_back(cv::Point2f(p));
     }
 
-    cv::Mat dst(src.cols, src.rows, CV_8UC1, cv::Scalar(0));
-    for (int r = 0; r < src.rows; ++r)
+    try
     {
-        for (int c = 0; c < src.cols; ++c)
+        sort_corners_float(sorted_corners);
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "ERROR in sort_corners_float: " << e.what() << std::endl;
+        return tag;
+    }
+
+    if (sorted_corners.size() != 4)
+    {
+        std::cerr << "ERROR: sort_corners_float corrupted corners!" << std::endl;
+        return tag;
+    }
+
+    tag.corners = sorted_corners;
+
+    // Calculate center
+    tag.center = cv::Point2f(0, 0);
+    for (const auto &p : sorted_corners)
+    {
+        tag.center += p;
+    }
+    tag.center.x /= 4;
+    tag.center.y /= 4;
+
+    // 2. Define destination points for 200×200 square
+    std::vector<cv::Point2f> dst_points = {
+        cv::Point2f(0, 0),     // TL
+        cv::Point2f(200, 0),   // TR
+        cv::Point2f(200, 200), // BR
+        cv::Point2f(0, 200)    // BL
+    };
+
+    // 3. Compute homography
+    cv::Mat H = custom_compute_homography(sorted_corners, dst_points);
+    if (H.empty())
+    {
+        return tag; // Failed
+    }
+
+    // 4. Warp to orthographic view
+    cv::Mat warped;
+    custom_warp_perspective(frame, warped, H, cv::Size(200, 200));
+
+    // 5. Convert to grayscale and threshold
+    cv::Mat gray_warped = rgbToGray(warped);
+    cv::Mat binary_warped = custom_threshold(
+        custom_blur_separable(gray_warped, 3, 1.0),
+        128);
+
+    // 6. Extract 8×8 grid
+    int grid[8][8];
+    int cell_size = 200 / 8; // 25 pixels per cell
+
+    for (int i = 0; i < 8; i++)
+    {
+        for (int j = 0; j < 8; j++)
         {
-            dst.at<uchar>(c, src.rows - 1 - r) = src.at<uchar>(r, c);
-        }
-    }
-    return dst;
-}
+            // Sample center of cell
+            int cx = j * cell_size + cell_size / 2;
+            int cy = i * cell_size + cell_size / 2;
 
-TagDecodeResult decode_ar_tag_8x8(const cv::Mat &warped_binary)
-{
-    TagDecodeResult result;
-    if (warped_binary.empty() || warped_binary.type() != CV_8UC1 || warped_binary.rows != warped_binary.cols)
-    {
-        return result;
-    }
-
-    const int grid_size = 8;
-    if (warped_binary.rows < grid_size)
-    {
-        return result;
-    }
-
-    auto sample_cell = [&](const cv::Mat &img, int row, int col) -> int
-    {
-        const int cell_h = img.rows / grid_size;
-        const int cell_w = img.cols / grid_size;
-        if (cell_h == 0 || cell_w == 0)
-        {
-            return 0;
-        }
-
-        const int y0 = row * cell_h;
-        const int x0 = col * cell_w;
-
-        const int y_start = y0 + cell_h / 4;
-        const int y_end = std::min(y0 + (3 * cell_h) / 4, img.rows);
-        const int x_start = x0 + cell_w / 4;
-        const int x_end = std::min(x0 + (3 * cell_w) / 4, img.cols);
-
-        int white_count = 0;
-        int total = 0;
-        for (int y = y_start; y < y_end; ++y)
-        {
-            for (int x = x_start; x < x_end; ++x)
+            // Sample 5×5 region around center
+            int sample_size = 5;
+            int sum = 0;
+            for (int dy = -sample_size / 2; dy <= sample_size / 2; dy++)
             {
-                ++total;
-                if (img.at<uchar>(y, x) > 127)
+                for (int dx = -sample_size / 2; dx <= sample_size / 2; dx++)
                 {
-                    ++white_count;
+                    int x = std::max(0, std::min(199, cx + dx));
+                    int y = std::max(0, std::min(199, cy + dy));
+                    sum += binary_warped.at<uchar>(y, x);
+                }
+            }
+
+            // Average: >128 = white (1), else black (0)
+            grid[i][j] = (sum / (sample_size * sample_size)) > 128 ? 1 : 0;
+        }
+    }
+
+    // 7. Find orientation by rotating and looking for marker at [5,5]
+    for (int rotation = 0; rotation < 4; rotation++)
+    {
+        // Rotate grid
+        int rotated[8][8];
+        for (int i = 0; i < 8; i++)
+        {
+            for (int j = 0; j < 8; j++)
+            {
+                if (rotation == 0)
+                {
+                    rotated[i][j] = grid[i][j];
+                }
+                else if (rotation == 1)
+                { // 90° CW
+                    rotated[i][j] = grid[7 - j][i];
+                }
+                else if (rotation == 2)
+                { // 180°
+                    rotated[i][j] = grid[7 - i][7 - j];
+                }
+                else
+                { // 270° CW
+                    rotated[i][j] = grid[j][7 - i];
                 }
             }
         }
 
-        if (total == 0)
+        // Check if orientation marker is at [5,5]
+        if (rotated[5][5] == 1)
         {
-            return 0;
-        }
+            // Verify border is mostly black
+            int border_white = 0;
+            int border_total = 0;
 
-        return (white_count * 2 >= total) ? 1 : 0;
-    };
-
-    int border_white_cells = 0;
-    for (int r = 0; r < grid_size; ++r)
-    {
-        for (int c = 0; c < grid_size; ++c)
-        {
-            if (r == 0 || c == 0 || r == grid_size - 1 || c == grid_size - 1)
+            // Top and bottom 2 rows
+            for (int j = 0; j < 8; j++)
             {
-                border_white_cells += sample_cell(warped_binary, r, c);
+                border_white += rotated[0][j] + rotated[1][j];
+                border_white += rotated[6][j] + rotated[7][j];
+                border_total += 4;
+            }
+
+            // Left and right 2 columns (excluding corners already counted)
+            for (int i = 2; i < 6; i++)
+            {
+                border_white += rotated[i][0] + rotated[i][1];
+                border_white += rotated[i][6] + rotated[i][7];
+                border_total += 4;
+            }
+
+            // Border should be mostly black
+            if ((float)border_white / border_total < 0.3)
+            {
+                // Valid orientation found!
+                tag.orientation = rotation * 90;
+
+                // Decode ID from central 2×2 matrix
+                // Positions: [3,3], [3,4], [4,4], [4,3] (clockwise)
+                int bit0 = rotated[3][3]; // Top-left
+                int bit1 = rotated[3][4]; // Top-right
+                int bit2 = rotated[4][4]; // Bottom-right
+                int bit3 = rotated[4][3]; // Bottom-left
+
+                tag.id = bit0 * 1 + bit1 * 2 + bit2 * 4 + bit3 * 8;
+
+                return tag; // Success!
             }
         }
     }
 
-    if (border_white_cells > 2)
-    {
-        return result;
-    }
-
-    const std::array<std::pair<int, int>, 4> marker_cells = {
-        std::make_pair(2, 2), // TL marker candidate
-        std::make_pair(2, 5), // TR marker candidate
-        std::make_pair(5, 5), // BR marker candidate (canonical)
-        std::make_pair(5, 2)  // BL marker candidate
-    };
-
-    int marker_bits[4] = {0, 0, 0, 0};
-    int marker_sum = 0;
-    for (int i = 0; i < 4; ++i)
-    {
-        marker_bits[i] = sample_cell(warped_binary, marker_cells[i].first, marker_cells[i].second);
-        marker_sum += marker_bits[i];
-    }
-
-    if (marker_sum != 1)
-    {
-        return result;
-    }
-
-    int rotations = 0;
-    if (marker_bits[2] == 1)
-        rotations = 0; // already BR
-    else if (marker_bits[1] == 1)
-        rotations = 1; // TR -> BR
-    else if (marker_bits[0] == 1)
-        rotations = 2; // TL -> BR
-    else
-        rotations = 3; // BL -> BR
-
-    cv::Mat canonical = warped_binary;
-    for (int i = 0; i < rotations; ++i)
-    {
-        canonical = rotate_binary_90_cw(canonical);
-    }
-
-    const int b0 = sample_cell(canonical, 3, 3);
-    const int b1 = sample_cell(canonical, 3, 4);
-    const int b2 = sample_cell(canonical, 4, 4);
-    const int b3 = sample_cell(canonical, 4, 3);
-
-    result.valid = true;
-    result.id = (b0 << 3) | (b1 << 2) | (b2 << 1) | b3;
-    result.clockwise_rotations_to_canonical = rotations;
-    return result;
+    // Failed to decode
+    return tag;
 }
