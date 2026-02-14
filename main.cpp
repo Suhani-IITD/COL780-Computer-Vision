@@ -9,7 +9,44 @@
 #include <cctype>
 #include <unordered_map>
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/utils/filesystem.hpp>
 #include "image_processing.h"
+
+enum class RunMode
+{
+    Task1,
+    Task2,
+    Task3,
+    All
+};
+
+static RunMode parse_mode_string(const std::string &mode_text)
+{
+    std::string m = mode_text;
+    std::transform(m.begin(), m.end(), m.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    if (m == "task1" || m == "1")
+        return RunMode::Task1;
+    if (m == "task2" || m == "2")
+        return RunMode::Task2;
+    if (m == "task3" || m == "3")
+        return RunMode::Task3;
+    return RunMode::All;
+}
+
+static void save_debug_image(const std::string &debug_dir,
+                             int frame_idx,
+                             const std::string &stage,
+                             const cv::Mat &img)
+{
+    if (debug_dir.empty() || img.empty())
+    {
+        return;
+    }
+    cv::utils::fs::createDirectories(debug_dir);
+    const std::string path = debug_dir + "/frame_" + std::to_string(frame_idx) + "_" + stage + ".png";
+    cv::imwrite(path, img);
+}
 
 struct ObjModel
 {
@@ -451,7 +488,7 @@ int main(int argc, char **argv)
     if (argc < 2)
     {
         std::cout << "Usage: " << argv[0]
-                  << " <video_path|0> [template_image] [intrinsics_yml] [obj_model]" << std::endl;
+                  << " <video_path|0> [template_image] [intrinsics_yml] [obj_model] [--mode task1|task2|task3|all] [--debug-dir out_dir]" << std::endl;
         std::cout << "Tip: pass '-' for template_image if you only want intrinsics/obj arguments." << std::endl;
         return -1;
     }
@@ -476,9 +513,31 @@ int main(int argc, char **argv)
     cv::Mat template_img;
     std::string intrinsics_path = "camera_intrinsics.yml";
     std::string obj_path;
-    if (argc >= 3)
+    RunMode run_mode = RunMode::All;
+    std::string debug_dir;
+
+    std::vector<std::string> positional_args;
+    for (int i = 2; i < argc; ++i)
     {
-        std::string template_path = argv[2];
+        std::string arg = argv[i];
+        if (arg == "--mode" && i + 1 < argc)
+        {
+            run_mode = parse_mode_string(argv[i + 1]);
+            ++i;
+            continue;
+        }
+        if (arg == "--debug-dir" && i + 1 < argc)
+        {
+            debug_dir = argv[i + 1];
+            ++i;
+            continue;
+        }
+        positional_args.push_back(arg);
+    }
+
+    if (positional_args.size() >= 1)
+    {
+        std::string template_path = positional_args[0];
         if (template_path != "-")
         {
             template_img = cv::imread(template_path, cv::IMREAD_COLOR);
@@ -488,9 +547,9 @@ int main(int argc, char **argv)
             }
         }
     }
-    if (argc >= 4)
+    if (positional_args.size() >= 2)
     {
-        std::string arg3 = argv[3];
+        std::string arg3 = positional_args[1];
         if (arg3.size() >= 4 && arg3.substr(arg3.size() - 4) == ".obj")
         {
             obj_path = arg3;
@@ -500,9 +559,9 @@ int main(int argc, char **argv)
             intrinsics_path = arg3;
         }
     }
-    if (argc >= 5)
+    if (positional_args.size() >= 3)
     {
-        obj_path = argv[4];
+        obj_path = positional_args[2];
     }
 
     cv::Mat K = load_intrinsics_matrix(intrinsics_path);
@@ -530,8 +589,11 @@ int main(int argc, char **argv)
     const int min_quad_area = 500;
     const cv::Size canonical_tag_size(200, 200);
     std::unordered_map<int, PoseSmoother> pose_smoothers_by_id;
+    const bool enable_task2_overlay = (run_mode == RunMode::All || run_mode == RunMode::Task2);
+    const bool enable_task3_render = (run_mode == RunMode::All || run_mode == RunMode::Task3);
 
     cv::Mat frame;
+    int frame_idx = 0;
     while (true)
     {
         cap >> frame;
@@ -560,9 +622,17 @@ int main(int argc, char **argv)
         cv::Mat sobel_edges = sobel_edge_detection(blurred);
         cv::Mat binary_for_contours = custom_threshold(sobel_edges, threshold_val);
         std::vector<std::vector<cv::Point>> detected_contours = detect_contours(binary_for_contours);
+        save_debug_image(debug_dir, frame_idx, "gray", gray);
+        save_debug_image(debug_dir, frame_idx, "blurred", blurred);
+        save_debug_image(debug_dir, frame_idx, "sobel", sobel_edges);
+        save_debug_image(debug_dir, frame_idx, "binary", binary_for_contours);
 
         cv::Mat display = frame.clone();
+        cv::Mat contour_debug = frame.clone();
+        draw_contours_custom(contour_debug, detected_contours, 1);
+        save_debug_image(debug_dir, frame_idx, "contours", contour_debug);
         bool warped_shown = false;
+        int quad_counter = 0;
 
         for (const auto &raw_contour : detected_contours)
         {
@@ -612,6 +682,7 @@ int main(int argc, char **argv)
             {
                 continue;
             }
+            quad_counter++;
 
             std::vector<cv::Point2f> src_points;
             src_points.reserve(4);
@@ -641,13 +712,15 @@ int main(int argc, char **argv)
 
             cv::Mat warped_gray = rgbToGray(warped_tag);
             cv::Mat warped_binary = custom_threshold(custom_blur_separable(warped_gray, 5, 1.0), 150);
+            save_debug_image(debug_dir, frame_idx, "warped_tag_" + std::to_string(quad_counter), warped_tag);
+            save_debug_image(debug_dir, frame_idx, "warped_binary_" + std::to_string(quad_counter), warped_binary);
 
             TagDecodeResult tag = decode_ar_tag_8x8(warped_binary);
-            if (tag.valid && !template_img.empty())
+            if (enable_task2_overlay && tag.valid && !template_img.empty())
             {
                 overlay_template_on_frame(template_img, approx_curve, display);
             }
-            if (tag.valid)
+            if (enable_task3_render && tag.valid)
             {
                 const std::vector<cv::Point2f> tag_plane = {
                     cv::Point2f(0.0f, 0.0f),
@@ -694,12 +767,23 @@ int main(int argc, char **argv)
             }
         }
 
-        cv::imshow("AR Tag Detection (Custom Pipeline)", display);
+        std::string window_title = "AR Tag Detection (Custom Pipeline)";
+        if (run_mode == RunMode::Task1)
+            window_title += " - Task1";
+        else if (run_mode == RunMode::Task2)
+            window_title += " - Task2";
+        else if (run_mode == RunMode::Task3)
+            window_title += " - Task3";
+        else
+            window_title += " - All";
+        cv::imshow(window_title, display);
+        save_debug_image(debug_dir, frame_idx, "final", display);
 
         if (cv::waitKey(1) == 'q')
         {
             break;
         }
+        frame_idx++;
     }
 
     cap.release();

@@ -2,7 +2,10 @@ param(
     [string]$Source = "Tag0.mp4",
     [string]$Template = "",
     [string]$Intrinsics = "camera_intrinsics.yml",
-    [string]$Obj = ""
+    [string]$Obj = "",
+    [ValidateSet("task1", "task2", "task3", "all")]
+    [string]$Mode = "task1",
+    [string]$DebugDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +44,12 @@ if ($Template -ne "" -or $Obj -ne "" -or (Test-Path (Join-Path $repoRoot $Intrin
 }
 
 $argString = ($argsList | ForEach-Object { "'$_'" }) -join " "
-$runCmd = "set -e; cd '$repoRoot'; export PATH=/ucrt64/bin:`$PATH; ./ar_tag_detector $argString"
+if ($DebugDir -ne "") {
+    $runCmd = "set -e; cd '$repoRoot'; export PATH=/ucrt64/bin:`$PATH; ./ar_tag_detector $argString --mode $Mode --debug-dir '$DebugDir'"
+    Write-Host "Running: ./ar_tag_detector $($argsList -join ' ') --mode $Mode --debug-dir $DebugDir" -ForegroundColor Cyan
+} else {
+    $runCmd = "set -e; cd '$repoRoot'; export PATH=/ucrt64/bin:`$PATH; ./ar_tag_detector $argString --mode $Mode"
+    Write-Host "Running: ./ar_tag_detector $($argsList -join ' ') --mode $Mode" -ForegroundColor Cyan
+}
 
-Write-Host "Running: ./ar_tag_detector $($argsList -join ' ')" -ForegroundColor Cyan
 & $bashExe -lc $runCmd
