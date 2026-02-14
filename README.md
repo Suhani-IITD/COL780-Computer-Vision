@@ -90,6 +90,26 @@ Windows test equivalents:
 .\scripts\test_windows.ps1 -Source multipleTags.mp4 -Mode task1
 ```
 
+Debug mode (recommended when tags are not visible):
+```powershell
+.\scripts\test_windows.ps1 -Source Tag0.mp4 -Mode task1 -DebugDir debug_out
+```
+
+This writes per-frame diagnostics to `debug_out`:
+- `frame_*_gray.png`
+- `frame_*_blurred.png`
+- `frame_*_sobel.png`
+- `frame_*_binary.png`
+- `frame_*_contours.png`
+- `frame_*_warped_tag_*.png`
+- `frame_*_warped_binary_*.png`
+- `frame_*_final.png`
+
+How to use debug outputs:
+- If `binary` is mostly black/noisy white, thresholding is the issue.
+- If `contours` has no clear tag shapes, contour extraction/filtering is failing.
+- If `warped_binary` is unclear, homography/quad corner quality is weak.
+
 Optional full test (only if these files exist locally):
 ```powershell
 .\scripts\test_windows.ps1 -Source Tag0.mp4 -Template iitd_logo_template.jpg -Intrinsics camera_intrinsics.yml -Obj wolf.obj

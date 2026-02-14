@@ -94,7 +94,7 @@ Run in PowerShell from repo root:
 ```powershell
 .\scripts\setup_windows_deps.ps1 -Install
 .\scripts\build_windows.ps1
-.\scripts\test_windows.ps1
+.\scripts\test_windows.ps1                      # default mode=task1 (tags + IDs)
 ```
 
 Intrinsics note:
@@ -106,7 +106,7 @@ python3 scripts/calibrate_camera.py --source 0 --pattern 9x6 --min-frames 20 --o
 
 Extra examples:
 ```powershell
-.\scripts\test_windows.ps1 -Source multipleTags.mp4
+.\scripts\test_windows.ps1 -Source multipleTags.mp4 -Mode task1
 ```
 
 Optional full example (only if you downloaded these files):
@@ -127,6 +127,17 @@ Regenerate placeholders anytime:
 ```bash
 python3 scripts/prepare_demo_assets.py
 ```
+
+Debugging missing tags:
+```powershell
+.\scripts\test_windows.ps1 -Source Tag0.mp4 -Mode task1 -DebugDir debug_out
+```
+
+Look at these files in `debug_out` for each frame:
+- `gray`, `blurred`, `sobel`, `binary` -> preprocessing quality
+- `contours` -> whether tag-like boundaries are detected
+- `warped_tag_*`, `warped_binary_*` -> whether candidate tags are decodable
+- `final` -> what the detector finally shows
 
 ## 7) How to Learn from This Code
 - Start by printing one debug message per stage in `main.cpp`.
